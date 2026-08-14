@@ -1,0 +1,11 @@
+# Normalise to LF in the repository regardless of the checkout platform.
+#
+# Developed on Windows with core.autocrlf=true, which had git warning "LF will
+# be replaced by CRLF" on every text file in every diff — noise that hides real
+# warnings. Nothing here depends on which ending reaches the working copy: the
+# HTML normaliser in fields.py folds whitespace itself, and AnkiConnect is
+# talked to over JSON, which carries its own escaping.
+* text=auto eol=lf
+
+# Resolved by uv, not written by hand. Diffing it is noise.
+uv.lock -diff linguist-generated

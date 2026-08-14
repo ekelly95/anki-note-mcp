@@ -1,0 +1,87 @@
+name: Release
+
+# Publishing is driven by a tag rather than a button, so that what reaches PyPI
+# is always a named point in the history. `ci.yml` triggers on `push: branches`,
+# which a tag push does not match — so the guards protecting the artefact are
+# repeated here rather than assumed to have run.
+#
+# NOTE: nothing has been published from this repository. Before the first tag is
+# pushed, PyPI needs an account, a pending publisher bound to project
+# `anki-note-mcp` / owner `ekelly95` / repository `anki-note-mcp` / workflow
+# `release.yml` / environment `pypi`, and that GitHub environment must exist.
+# Renaming this file or that environment breaks publishing with an
+# authentication error that looks nothing like the cause.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked --group dev
+      # A version number can never be re-used on PyPI, and a tag pointing at a
+      # commit that was never on `main` would skip the matrix entirely. Both are
+      # cheaper to catch here than after an upload that cannot be taken back.
+      - name: The tag names the version being built
+        run: |
+          version=$(uv run python -c "import anki_mcp; print(anki_mcp.__version__)")
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag $tag does not match __version__ $version"
+            exit 1
+          fi
+      - name: Tests, on the exact commit being published
+        run: |
+          uv run coverage run -m pytest
+          uv run coverage report
+      - run: uv build
+      - name: Metadata is well formed
+        run: uvx twine check dist/*
+      - name: No tests escaped into the wheel
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          leaked = [n for n in names if n.endswith("_test.py") or "/testing/" in n]
+          if leaked:
+              print(f"::error::test modules leaked into the wheel: {leaked}")
+              sys.exit(1)
+          PY
+      - name: The typing marker shipped
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          assert "anki_mcp/py.typed" in names, names
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted publishing: GitHub proves its own identity to PyPI at the moment
+    # of upload, so no API token exists anywhere to be stored or leaked.
+    #
+    # Uploading is a separate job because `id-token: write` *is* the credential.
+    # Keeping it on a job that only downloads a file and posts it means no build
+    # or test code ever runs beside the ability to mint one.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

@@ -1,0 +1,182 @@
+[project]
+# The distribution name is not the command name. `anki-mcp` on PyPI is Johannes
+# Wiebe's Anki MCP server, claimed long before this one existed, so
+# `pip install anki-mcp` can never point here — hence `anki-note-mcp`, which the
+# repository is named to match. What deliberately does not follow: the import
+# package stays `anki_mcp`, the console script stays `anki-mcp`, and the identity
+# this server reports over MCP stays `anki-mcp`. Renaming those would break every
+# host registration that already exists, to fix a string that only appears in an
+# install command.
+name = "anki-note-mcp"
+# Read from `anki_mcp.__version__` so the number lives in one place. It was
+# previously written here and there, with nothing keeping the two in step, and
+# the release workflow refuses a tag that disagrees with it.
+dynamic = ["version"]
+description = "Single-note Anki reading and writing over AnkiConnect, as an MCP server."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["anki", "ankiconnect", "mcp", "model-context-protocol", "flashcards", "spaced-repetition"]
+dependencies = [
+    # Official MCP Python SDK, v1 line (built-in FastMCP). The <2 pin is
+    # load-bearing: 2.0.0 shipped the same day as 1.29.0 (2026-07-28) and is
+    # what a bare `pip install mcp` now resolves to. v2 renames FastMCP to
+    # MCPServer and splits mcp.types into mcp-types, so an unpinned resolve
+    # breaks every import in this package.
+    #
+    # This ceiling is also what the SDK's own README instructs: "keep a <2 upper
+    # bound on your requirement ... until you've migrated". v1.x lives on its own
+    # branch and still receives critical bug fixes and security patches, and the
+    # deprecation window runs twelve months from 2026-07-28. So this is a
+    # position, not neglect — do not raise it as routine dependency hygiene.
+    #
+    # It costs a protocol revision: this server speaks 2025-11-25 where the
+    # current specification is 2026-07-28. A client asking for the newer one is
+    # negotiated down cleanly, and two tests in entrypoint_test.py hold that.
+    # docs/roadmap.md carries what migration would cost and the trigger for it.
+    "mcp>=1.29,<2",
+    # Floor only, and that is the decision rather than the omission. A `<1`
+    # ceiling would guard a major release the maintainers have already said
+    # ships under a different name — `httpx2`, see docs/design.md row 16 — while
+    # doing nothing about the 0.x minor bumps that are what actually break a
+    # pre-1.0 package. The tracked uv.lock is what holds this install still.
+    "httpx>=0.28",
+    "pydantic>=2.11,<3",
+    # Only for to_thread.run_sync, which keeps the blocking AnkiConnect call
+    # off the event loop. It arrives anyway as an mcp dependency, but this
+    # package imports it directly, so it is declared directly — and bounded
+    # directly, since a major bump could move the one function relied on.
+    "anyio>=4,<5",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Education",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Education",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/ekelly95/anki-note-mcp"
+Repository = "https://github.com/ekelly95/anki-note-mcp"
+Issues = "https://github.com/ekelly95/anki-note-mcp/issues"
+
+[project.scripts]
+anki-mcp = "anki_mcp.server:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# PEP 735 rather than an `optional-dependencies` extra, which is what the
+# sibling projects use. A dev group is not something anyone should be able to
+# install alongside the package, and uv resolves it into the lockfile without
+# it becoming part of the published metadata.
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "coverage>=7.6",
+]
+
+[tool.hatch.version]
+path = "src/anki_mcp/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anki_mcp"]
+# Tests live beside the code they test, so they must be excluded explicitly.
+# This is the exclusion that matters and the one CI asserts against: what must
+# never happen is `import anki_mcp.server_test` working in someone's
+# environment, or `testing/fake_anki.py` binding a port inside an installed
+# package. The sdist below deliberately keeps them.
+exclude = ["**/*_test.py", "**/testing/"]
+
+[tool.hatch.build.targets.sdist]
+# An allowlist, so a new top-level file has to be added on purpose rather than
+# shipped by accident. `src` is included whole, tests and all: unlike the
+# sibling projects there is no third-party fixture data here with a licence of
+# its own, everything under src is this project's own MIT code, and an sdist
+# that carries its own test suite is one a packager can actually verify.
+#
+# Out on purpose: docs/ is repository-facing engineering history,
+# and AGENT_GUIDE/CLAUDE/AGENTS are instructions to a coding agent working on
+# this tree. None of them tells someone who installed the wheel anything they
+# can act on.
+include = [
+    "/src",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/SECURITY.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+# B catches the mutable-default-argument class of defect the source spec's own
+# code exhibits (`tags: list[str] = []`).
+select = ["E", "F", "B", "UP", "SIM", "RUF", "ANN"]
+# ANN401 forbids `Any` in annotations. This server's job is mediating
+# AnkiConnect's untyped JSON: `invoke` forwards arbitrary params and returns
+# whatever the action returns, so `Any` there is the accurate type rather than
+# a lapse. The typing that actually matters is enforced at the envelope, in
+# client._unwrap, and is covered by tests.
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"*_test.py" = ["ANN201", "ANN001"]
+
+[tool.mypy]
+# The package ships `py.typed`, so anything installing it type-checks against
+# these annotations. Strict is the only setting that makes that marker a promise
+# rather than a claim.
+strict = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["src"]
+python_files = ["*_test.py"]
+# The live tier writes to a real collection, so it is never part of the default
+# run. Opt in with `uv run pytest -m live` (a later -m on the command line wins).
+addopts = "-m 'not live'"
+markers = [
+    "live: writes to a real Anki collection via AnkiConnect on 8765; opt-in",
+]
+
+[tool.coverage.run]
+source = ["anki_mcp"]
+branch = true
+# Tests are inside the measured package, so they would otherwise report their
+# own coverage and inflate the figure towards 100% by construction.
+omit = ["*/_test.py", "*_test.py", "*/testing/*"]
+
+[tool.coverage.report]
+show_missing = true
+# Measured, not aspired to: the suite reaches every statement and every branch.
+# It was 96% when this gate was first added, and the four gaps were worth more
+# than the number — one of them was a search-budget test asserting 6,000 <= 40,000,
+# which had never exercised the budget at all. If a change adds a line no test
+# reaches, either test it or delete it. Do not lower this to make a change pass.
+fail_under = 100
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abstractmethod",
+    "if __name__ == .__main__.:",
+]

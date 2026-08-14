@@ -1,0 +1,25 @@
+# Build output
+dist/
+*.egg-info/
+
+# Dependencies — uv.lock IS tracked, deliberately. The mcp v1/v2 split landed
+# on a single day, which is exactly why the lockfile matters more than usual.
+.venv/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage's own database and HTML report. The figure is a gate, not an
+# artefact: it is produced by the run that checks it and means nothing without
+# the run.
+.coverage
+.coverage.*
+htmlcov/
+
+# Generated whole-repo snapshots. Untracked but unignored, `git add -A` would
+# have committed a quarter-megabyte copy of every source file — and the next
+# one, taken after some secret exists, would commit that too.
+repomix-output.*

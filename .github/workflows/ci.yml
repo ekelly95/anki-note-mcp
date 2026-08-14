@@ -1,0 +1,174 @@
+name: CI
+
+# Every push runs the whole matrix. The package claims OS independence and
+# Python 3.10-3.14 in its classifiers, and a portability claim tested only when
+# somebody remembers to trigger it by hand is a claim about the day they
+# remembered.
+#
+# The `live` marker is excluded everywhere, and not by accident: those tests
+# write to a real Anki collection over AnkiConnect, and there is no Anki on a
+# runner. `pyproject.toml` deselects them by default, so nothing here has to.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # --locked rather than a plain sync: it fails if pyproject.toml has moved
+      # without uv.lock following, which is the one dependency mistake that
+      # would otherwise reach a release. The mcp v1/v2 split landed on a single
+      # day; the lockfile is what stands between that and a broken import.
+      - run: uv sync --locked --group dev
+      - name: Formatting
+        run: uv run ruff format --check src
+      - name: Lint
+        run: uv run ruff check src
+      # The wheel ships `py.typed`, so anything installing this package checks
+      # its own code against these annotations. This is what makes the marker
+      # true rather than merely present — the build job asserts it shipped, and
+      # this asserts it was worth shipping.
+      - name: Types
+        run: uv run mypy src
+
+  test:
+    runs-on: ${{ matrix.os }}
+    # The full grid only when asked for by hand. It exists to prove the OS
+    # independence and 3.10-3.14 support the classifiers claim, and a claim
+    # about which Pythons work does not change on every push — but the bill
+    # does. Runs on a private repository draw on a monthly minute allowance,
+    # where macOS bills at ten times Linux and Windows at twice: the fifteen-job
+    # grid is roughly 200 billable minutes, about three quarters of it macOS
+    # alone. Ubuntu on one version catches the ordinary mistake for a tenth of
+    # it. On a public repository the allowance does not apply and this split is
+    # worth revisiting rather than keeping out of habit.
+    #
+    # `&&`/`||` here return the operand rather than a boolean, which is the
+    # documented way to pick a matrix per event. Re-prove the grid with
+    # `gh workflow run ci.yml --ref main` after a dependency or Python-support
+    # change, and record the result in docs/roadmap.md.
+    strategy:
+      fail-fast: false
+      matrix:
+        # Folded with `>-`, and every continuation line sits at the SAME indent
+        # as the first. A more-indented line in a folded scalar keeps its
+        # newline instead of folding to a space, which would leave literal
+        # newlines inside the `${{ }}`.
+        os: >-
+          ${{ github.event_name == 'workflow_dispatch'
+          && fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]')
+          || fromJSON('["ubuntu-latest"]') }}
+        python-version: >-
+          ${{ github.event_name == 'workflow_dispatch'
+          && fromJSON('["3.10", "3.11", "3.12", "3.13", "3.14"]')
+          || fromJSON('["3.12"]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --locked --group dev
+      # Never piped. A `| tail` that swallows a non-zero exit is how a red run
+      # reads as green.
+      - name: Tests, with the coverage gate
+        run: |
+          uv run coverage run -m pytest
+          uv run coverage report
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv build
+      - name: Metadata is well formed
+        run: uvx twine check dist/*
+      # Unlike the sibling projects, the sdist carries its tests on purpose:
+      # there is no third-party fixture data here with a licence of its own, and
+      # an sdist a packager can run the suite from is worth more than a smaller
+      # one. The exclusion that matters is the wheel's, because that is what
+      # ends up importable in somebody's environment.
+      - name: No tests escaped into the wheel
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          leaked = [n for n in names if n.endswith("_test.py") or "/testing/" in n]
+          if leaked:
+              print(f"::error::test modules leaked into the wheel: {leaked}")
+              sys.exit(1)
+          PY
+      - name: The typing marker shipped
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          assert "anki_mcp/py.typed" in names, names
+          PY
+      # The strongest gate here: build output that imports on the dev machine
+      # still proves nothing about a machine that only has the wheel. This
+      # installs it outside the checkout and speaks the actual protocol to it.
+      # It needs no Anki — the client is constructed at startup but connects
+      # only when a tool is called — which is exactly why it is cheap enough to
+      # run on every push.
+      - name: Install the wheel elsewhere and speak MCP to it
+        run: |
+          mkdir -p /tmp/scratch && cd /tmp/scratch
+          python -m venv .venv
+          .venv/bin/python -m pip install --quiet "$(ls $GITHUB_WORKSPACE/dist/*.whl)"
+          .venv/bin/python - <<'PY'
+          import json, subprocess, sys
+          from importlib.metadata import version
+
+          expected = version("anki-note-mcp")
+          # encoding is explicit rather than inherited: text=True decodes the
+          # pipe with the locale codec, which on Windows is cp1252 and raises on
+          # any non-ASCII character in a reply the server wrote correctly. This
+          # job runs on Linux where the default is already UTF-8, so the pin is
+          # for whoever copies this script to a machine where it is not.
+          proc = subprocess.Popen(
+              [".venv/bin/anki-mcp"],
+              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+              text=True, encoding="utf-8",
+          )
+          request = {
+              "jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {
+                  "protocolVersion": "2025-06-18",
+                  "capabilities": {},
+                  "clientInfo": {"name": "ci", "version": "0"},
+              },
+          }
+          out, err = proc.communicate(json.dumps(request) + "\n", timeout=60)
+          reply = next((json.loads(line) for line in out.splitlines() if line.strip()), None)
+          if reply is None:
+              print(f"::error::no reply on stdout. stderr was: {err}")
+              sys.exit(1)
+          info = reply["result"]["serverInfo"]
+          assert info["name"] == "anki-mcp", info
+          # Compared against the installed distribution's own metadata, because
+          # FastMCP's constructor takes no version: without the assignment in
+          # build_server this silently reports the MCP SDK's version instead,
+          # and any check that merely asserts the field is non-empty passes.
+          assert info["version"] == expected, f"expected {expected}, got {info}"
+          print("initialize ->", info)
+          PY

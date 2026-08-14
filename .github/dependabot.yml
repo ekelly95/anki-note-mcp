@@ -1,0 +1,26 @@
+version: 2
+
+# GitHub Actions only. The Python dependencies are floor-pinned with two
+# deliberate ceilings (`mcp<2` and `pydantic<3`), resolved into `uv.lock`, and
+# the ceiling on `mcp` is the whole reason the lockfile is tracked — a bot
+# raising it would undo the one pin that stops every import breaking. Bumping
+# those is a decision, not a chore.
+#
+# The consequence, stated so it is not mistaken for an oversight: nothing here
+# will announce a new `mcp` release. That ceiling is reviewed by hand against
+# the "Protocol and SDK standing" section of docs/roadmap.md, which names the
+# trigger for revisiting it.
+#
+# Actions are the opposite case: they are pinned to commit SHAs, which nothing
+# but a bot will ever notice going stale.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: CI
+    labels:
+      - dependencies
