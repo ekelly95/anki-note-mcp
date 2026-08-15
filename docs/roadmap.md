@@ -162,21 +162,44 @@ gate at the measured 100%, and CI workflows.
 **CI is written and has still never completed a job, 2026-08-14.** Actions is
 disabled at the repository level while this repository is private, and the one
 dispatched run attempted before that had every job refused before startup for
-want of runner minutes. That is account state rather than workflow state:
-`ci.yml` and `release.yml` have never been executed by anything, and nothing can
-be concluded about them beyond what reading them establishes. No minutes were
-consumed, because no job started.
+want of runner minutes. That is account state rather than workflow state, and
+nothing GitHub does can be concluded from it.
 
 **The route to a green run is making this repository public.** Actions is free
 and unlimited on public repositories, so the constraint disappears outright
 rather than needing to be paid for. That is the intention rather than a
 commitment, and it has not happened yet.
 
-So the portability claim in the classifiers is only **half proven**. Both ends of
-the Python range hold: the full suite — 264 offline and all 25 live against a
-real collection — passes on 3.12 and on 3.14, measured 2026-08-14. Nothing
-between them has been run, and **every measurement to date is on Windows**. Treat
-the OS-independence half as an intention until a matrix run is green.
+### What was proven locally instead, 2026-08-14
+
+Everything CI would check that does not require a runner was run by hand, so
+that a first green build confirms rather than discovers. Do not repeat this work
+without a reason:
+
+- **The whole declared Python range passes.** Both tiers — 264 offline tests at
+  a measured 100% of statements and branches, and all 25 live tests against a
+  real collection — are green on 3.10, 3.11, 3.12, 3.13 and 3.14. `ruff check`
+  and `mypy --strict` are clean on the oldest as well as the newest.
+- **`uv sync --locked` succeeds on every one of those versions**, which is the
+  install step each matrix job runs, and is what would fail first if `uv.lock`
+  had drifted from `pyproject.toml`.
+- **Every packaging guard in `release.yml` passes.** `uv build` produces both
+  artefacts, `twine check` passes on both, no `_test.py` or `testing/` module
+  reaches the wheel, and `py.typed` does. The wheel then installs into a clean
+  environment and its `anki-mcp` console script completes an MCP initialize
+  handshake, reporting `anki-mcp` 0.1.0 on protocol `2025-11-25`.
+- **Both workflow files and `dependabot.yml` parse**, and — the thing most
+  likely to break on a first run — the folded `>-` matrix scalars in `ci.yml`
+  collapse to single-line strings with no embedded newline, which is exactly the
+  failure the comment above them warns about.
+
+So the classifiers' claim now splits cleanly in two. **The Python range is
+proven.** **The OS independence is not**, and cannot be from here: every
+measurement is on Windows, and this machine has neither WSL nor Docker. Treat
+that half as an intention until a matrix run is green. What a first CI run is
+still genuinely discovering is Linux and macOS, whether the pinned action SHAs
+resolve, and whether GitHub evaluates the `workflow_dispatch` matrix expression
+the way reading it says it should.
 
 **The full matrix is now on demand rather than on every push.** `ci.yml` picks
 its matrix from `github.event_name`: a push or pull request runs Ubuntu on 3.12,
