@@ -18,6 +18,10 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    # `default-days` is the only cooldown key the github-actions ecosystem
+    # supports — the `semver-major-days`/`-minor-`/`-patch-` variants exist but
+    # are accepted for other ecosystems only. Verified against GitHub's
+    # Dependabot options reference, 2026-08-15.
     cooldown:
       default-days: 7
     commit-message:

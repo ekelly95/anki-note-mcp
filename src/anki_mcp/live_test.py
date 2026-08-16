@@ -606,9 +606,10 @@ def test_a_long_run_of_sequential_calls_does_not_drop_a_connection(anki: AnkiCli
 
 
 def test_a_note_created_now_gets_a_sane_timestamp_id(anki: AnkiClient) -> None:
-    """Anki derives note ids from the system clock. This machine's clock was
-    ~15h fast until it was corrected; if it drifts again, ids land in the
-    future and scheduling goes with them."""
+    """Anki derives note ids from the system clock, so a machine whose clock is
+    wrong writes notes with ids in the future and scheduling follows them there.
+    This has happened here once, by about fifteen hours, and nothing else in the
+    suite would have noticed."""
     import time
 
     note_id = add(anki, SCRATCH_DECK, "reloj")

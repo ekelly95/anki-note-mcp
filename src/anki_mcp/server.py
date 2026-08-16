@@ -1,16 +1,15 @@
 """The MCP surface.
 
 `build_server` is kept separate from `main` so tests can construct a server
-without the entry point's side effects — the same split both sibling servers
-use. Tools carry no logic beyond shaping a call and its result; everything that
-can fail lives behind `ctx.anki.invoke`.
+without the entry point's side effects. Tools carry no logic beyond shaping a
+call and its result; everything that can fail lives behind `ctx.anki.invoke`.
 
 On the error contract: tools other than `anki_status` let `AnkiError`
 propagate. Measured against mcp 1.29 (Phase 0), FastMCP catches a raised
 exception and returns it as a tool result with `isError` set and the message
-intact — which is exactly what `result.ts`'s `fail()` does by hand in the
-TypeScript siblings. Raising is therefore equivalent here, and simpler. It is
-not equivalent in the low-level SDK, so this is a FastMCP-specific choice.
+intact — the same result a server that catches and formats the failure by hand
+would produce. Raising is therefore equivalent here, and simpler. It is not
+equivalent in the low-level SDK, so this is a FastMCP-specific choice.
 
 Return types are Pydantic models rather than `dict`. Measured in Phase 0: a
 bare `-> dict` annotation produces no output schema and no structuredContent at
@@ -1050,8 +1049,7 @@ def _shutdown(signum: int, frame: types.FrameType | None) -> None:
 
     Python's default for SIGTERM ends the process outright, so `main`'s
     `finally` never runs and the client is never closed. Raising instead lets
-    the normal path do it, which is what both sibling servers get from
-    `process.on('SIGTERM', ...)`.
+    the normal path do it.
 
     On Windows this is decoration: a host stopping the server calls
     TerminateProcess, which delivers no signal at all and leaves the socket to

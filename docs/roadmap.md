@@ -159,16 +159,12 @@ Landed as engineering rather than behaviour: a licence, a `py.typed` marker,
 publishable metadata under the distribution name `anki-note-mcp`, a coverage
 gate at the measured 100%, and CI workflows.
 
-**CI is written and has still never completed a job, 2026-08-14.** Actions is
-disabled at the repository level while this repository is private, and the one
-dispatched run attempted before that had every job refused before startup for
-want of runner minutes. That is account state rather than workflow state, and
-nothing GitHub does can be concluded from it.
-
-**The route to a green run is making this repository public.** Actions is free
-and unlimited on public repositories, so the constraint disappears outright
-rather than needing to be paid for. That is the intention rather than a
-commitment, and it has not happened yet.
+**CI is written and has still never completed a job, 2026-08-15.** Actions is
+disabled at the repository level, so there is no workflow run history at all.
+That is repository state rather than workflow state: nothing about these
+workflows can be concluded from it, in either direction. Enabling Actions and
+dispatching `ci.yml` is the first thing to do here, and what comes back belongs
+in this section.
 
 ### What was proven locally instead, 2026-08-14
 
@@ -192,25 +188,44 @@ without a reason:
   likely to break on a first run — the folded `>-` matrix scalars in `ci.yml`
   collapse to single-line strings with no embedded newline, which is exactly the
   failure the comment above them warns about.
+- **All five pinned action SHAs resolve to the versions their comments claim**,
+  checked against the GitHub API on 2026-08-15: `actions/checkout` v7.0.1,
+  `astral-sh/setup-uv` v10.0.0, `actions/upload-artifact` v7.0.1,
+  `actions/download-artifact` v8.0.1 and `pypa/gh-action-pypi-publish` v1.14.2.
+  A SHA that does not resolve fails at the moment you least want it to, and this
+  is cheap to re-run after any pin is bumped:
+  `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`.
 
 So the classifiers' claim now splits cleanly in two. **The Python range is
 proven.** **The OS independence is not**, and cannot be from here: every
-measurement is on Windows, and this machine has neither WSL nor Docker. Treat
-that half as an intention until a matrix run is green. What a first CI run is
-still genuinely discovering is Linux and macOS, whether the pinned action SHAs
-resolve, and whether GitHub evaluates the `workflow_dispatch` matrix expression
-the way reading it says it should.
+measurement is on Windows, and neither WSL nor Docker is available on the
+machine this was built on. Treat that half as an intention until a matrix run is
+green. What a first CI run is still genuinely discovering is Linux and macOS,
+and whether GitHub evaluates the `workflow_dispatch` matrix expression the way
+reading it says it should.
 
-**The full matrix is now on demand rather than on every push.** `ci.yml` picks
-its matrix from `github.event_name`: a push or pull request runs Ubuntu on 3.12,
-and `workflow_dispatch` runs the whole three-OS, five-version grid. This is a
-cost decision, and only about billable runner minutes on a private repository —
-macOS bills at ten times Linux and Windows at twice, which puts the fifteen-job
-grid at roughly 200 minutes against a 2,000/month allowance, about three quarters
-of it macOS. Re-prove the grid with `gh workflow run ci.yml --ref main` after a
-dependency or Python-support change, and record the result here. If this
-repository ever goes public the cost argument disappears, and the split is worth
-revisiting rather than keeping out of habit.
+**The full matrix is on demand rather than on every push.** `ci.yml` picks its
+matrix from `github.event_name`: a push or pull request runs Ubuntu on 3.12, and
+`workflow_dispatch` runs the whole three-OS, five-version grid. A claim about
+which Pythons and which systems work does not change on every push, and one leg
+returns in the time the slowest of fifteen would still be running.
+
+That split was originally a cost decision about runner minutes, and what is left
+of it is latency — a weaker argument than the one it replaced. **It is worth
+re-deciding once the grid has actually run**, rather than kept out of habit: if
+fifteen jobs turn out to be fast and stable, put them on every push. Re-prove
+the grid with `gh workflow run ci.yml --ref main` after a dependency or
+Python-support change, and record the result here.
+
+**Two things about a first run, so they are not read as defects.** The Windows
+legs need `shell: bash` on the test step and have it — pwsh does not abort a
+script when a native command exits non-zero, so a failing `pytest` followed by a
+passing `coverage report` would report green, and the coverage gate would not
+catch it because a failing test still executes the code it touches. And two
+assertions are wall-clock rather than logical — `server_test.py`'s concurrency
+check and `client_test.py`'s connect-timeout bound — so a loaded shared runner
+can turn one leg red without anything being wrong. Confirm on a re-run before
+investigating.
 
 ## Protocol and SDK standing, 2026-08-13
 
@@ -279,10 +294,10 @@ call costs two round trips over loopback. That is the cheaper side of the trade.
 
 **Multi round-trip requests and elicitation** (`Resolve`, `Elicit`,
 `InputRequiredResult`) also reach stdio, and would let a write confirm itself
-mid-call. Not obviously an improvement here: `make-anki-cards` already proposes
-a whole run and takes one answer, in the conversation, where the user can see
-every card at once. Per-call protocol prompts would ask six times for what is
-currently asked once, and asking more often is not the same as asking better.
+mid-call. Not obviously an improvement here. A caller driving a run of cards can
+propose the whole run and take one answer in the conversation, where the user
+sees every card at once; per-call protocol prompts would ask six times for what
+is currently asked once, and asking more often is not the same as asking better.
 
 **The Tasks extension** is unavailable regardless — 2026-07-28 moved it out of
 the core into an official extension the Python SDK does not implement yet.
@@ -358,15 +373,14 @@ None of these block anything.
 4. **An `.mcpb` bundle.** Assumes a system Python, and is only worth it to hand
    this to someone who does not develop.
 
-## Declined from the security audit, with reasons
+## Declined review findings, with reasons
 
 Recorded here so a later round does not re-open them without new information.
-The audit itself — two rounds of `audit/REPORT.md` and `audit/FIXPLAN.md`, ten
-findings, one High and four Medium, none Critical — is not in this repository.
-Its durable content was folded into this file and `docs/gotchas.md`, and the
-originals were dropped: the fix plan had drifted out of agreement with the README
-about which items were still open, and two documents disagreeing about the
-backlog is worse than one.
+Each was raised by a code review of this server, considered, and turned down for
+the reason given — which is the part worth keeping. Anything durable those
+reviews produced was folded into this file and `docs/gotchas.md` instead of
+being kept as a separate backlog, because two documents disagreeing about what
+is still open is worse than one.
 
 **Streaming byte ceilings in front of the HTTP buffer.** The buffered body is
 this collection, served by this Anki over loopback. The hostile-endpoint version

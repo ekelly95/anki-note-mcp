@@ -14,6 +14,12 @@ name = "anki-note-mcp"
 dynamic = ["version"]
 description = "Single-note Anki reading and writing over AnkiConnect, as an MCP server."
 readme = "README.md"
+# The same address the commits in this repository carry. Package metadata is
+# published and permanent; a forwarding address belongs here and a personal one
+# does not.
+authors = [
+    { name = "ekelly95", email = "313907567+ekelly95@users.noreply.github.com" },
+]
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -78,10 +84,10 @@ anki-mcp = "anki_mcp.server:main"
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
-# PEP 735 rather than an `optional-dependencies` extra, which is what the
-# sibling projects use. A dev group is not something anyone should be able to
-# install alongside the package, and uv resolves it into the lockfile without
-# it becoming part of the published metadata.
+# PEP 735 rather than an `optional-dependencies` extra. A dev group is not
+# something anyone should be able to install alongside the package, and uv
+# resolves it into the lockfile without it becoming part of the published
+# metadata.
 [dependency-groups]
 dev = [
     "pytest>=8.3",
@@ -104,15 +110,16 @@ exclude = ["**/*_test.py", "**/testing/"]
 
 [tool.hatch.build.targets.sdist]
 # An allowlist, so a new top-level file has to be added on purpose rather than
-# shipped by accident. `src` is included whole, tests and all: unlike the
-# sibling projects there is no third-party fixture data here with a licence of
-# its own, everything under src is this project's own MIT code, and an sdist
-# that carries its own test suite is one a packager can actually verify.
+# shipped by accident. `src` is included whole, tests and all: there is no
+# third-party fixture data here with a licence of its own, everything under src
+# is this project's own MIT code, and an sdist that carries its own test suite
+# is one a packager can actually verify.
 #
-# Out on purpose: docs/ is repository-facing engineering history,
-# and AGENT_GUIDE/CLAUDE/AGENTS are instructions to a coding agent working on
-# this tree. None of them tells someone who installed the wheel anything they
-# can act on.
+# Out on purpose: docs/ is repository-facing engineering history, CONTRIBUTING
+# and CODE_OF_CONDUCT govern participation in the repository rather than use of
+# the package, and AGENT_GUIDE/CLAUDE/AGENTS are instructions to a coding agent
+# working on this tree. None of them tells someone who installed the wheel
+# anything they can act on.
 include = [
     "/src",
     "/README.md",

@@ -70,8 +70,8 @@ Each is a decision plus the failure mode of the obvious alternative.
 - **The duplicate check sets `checkChildren`.** Left at AnkiConnect's default, a
   duplicate in `Deck::Sub` is invisible when adding to `Deck`.
 - **The startup banner is ASCII.** Windows stderr is not reliably UTF-8.
-- **Tests co-located as `*_test.py`,** matching the sibling projects. Cost: an
-  explicit hatchling `exclude` keeps them out of the wheel.
+- **Tests co-located as `*_test.py`,** beside the module each one covers. Cost:
+  an explicit hatchling `exclude` keeps them out of the wheel.
 - **No mocks.** `testing/fake_anki.py` is a real HTTP server that mimics
   AnkiConnect faithfully rather than conveniently — it compares the API key on
   every sub-action of a `multi`, and only envelopes successes above version 4.

@@ -32,14 +32,22 @@ two messages, and one test asserting they never converge.
 
 ## Deviations from the source spec
 
-Built from a specification document that no longer travels with this repository.
-This table is what survives of it, and it is the more useful half: where the
-build differs from the document, it is deliberate, and the reason is here.
+This server was built from a written specification, and the specification is not
+part of this repository — the table below is what survives of it, and it is the
+more useful half. Every row is a place the build departs from that document on
+purpose, with the reason. Nothing here needs the original to be readable.
 
 Rows 1–9 are defects in the document. Rows 10–16 are judgment calls. Rows 17–22
 were found by running the thing. Rows 23–30 came out of reviewing it once it
 worked, and most of those were settled by reading the add-on's own source rather
 than its documentation.
+
+Several rows compare against **the sibling servers**: two other MCP servers by
+the same author, written in TypeScript and built either side of this one. They
+are referenced only as precedent for a convention — where a habit came from, and
+whether departing from it here was deliberate. Nothing in this repository
+depends on them, and a host launches every MCP server as its own independent
+subprocess regardless of language.
 
 | # | Spec said | Built | Why |
 |---|---|---|---|
@@ -74,7 +82,7 @@ than its documentation.
 | 29 | Caps are checked against a floor | …and a ceiling | Failing loudly ran in one direction only: `ANKI_MAX_FIELD_CHARS=50000000` was accepted in silence. `ANKI_MAX_SEARCH` is also published to every client as `le=` on `anki_find_notes`'s `limit`, so a fat-fingered value shipped a nonsense schema. The ceilings are generous on purpose — `ANKI_MAX_FIELD_CHARS` is now the only lever that makes a large field editable at all. |
 | 30 | `finally: ctx.anki.close()` | …plus SIGINT/SIGTERM handlers | Python's default for SIGTERM ends the process outright, so the `finally` never ran; both siblings install handlers for the same reason. Honest limit: on Windows a host stops the server with TerminateProcess and no signal is delivered, so this only helps on POSIX. The path that actually runs there is stdin closing, which `entrypoint_test.py` asserts exits 0 with no traceback. |
 
-## Deviations from the sibling projects
+## Deviations from the sibling servers
 
 Three, all deliberate, so they are not mistaken for drift.
 

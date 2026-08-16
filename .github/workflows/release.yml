@@ -5,15 +5,27 @@ name: Release
 # which a tag push does not match — so the guards protecting the artefact are
 # repeated here rather than assumed to have run.
 #
-# NOTE: nothing has been published from this repository. Before the first tag is
-# pushed, PyPI needs an account, a pending publisher bound to project
-# `anki-note-mcp` / owner `ekelly95` / repository `anki-note-mcp` / workflow
-# `release.yml` / environment `pypi`, and that GitHub environment must exist.
-# Renaming this file or that environment breaks publishing with an
-# authentication error that looks nothing like the cause.
+# NOTE: nothing has been published from this repository, and none of what this
+# needs exists yet. Before the first tag is pushed, PyPI needs an account, a
+# pending publisher bound to project `anki-note-mcp` / owner `ekelly95` /
+# repository `anki-note-mcp` / workflow `release.yml` / environment `pypi`, and
+# that GitHub environment must exist. Renaming this file or that environment
+# breaks publishing with an authentication error that looks nothing like the
+# cause.
+#
+# Pushing a `v*` tag before all of that exists does not fail early: `build` goes
+# green and `publish` then fails at the OIDC exchange. Do not tag to test this
+# workflow.
 on:
   push:
     tags: ["v*"]
+
+# Two tags pushed in quick succession would otherwise race two uploads at the
+# same project. Not cancel-in-progress: a half-finished upload is worse than a
+# queued one.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -21,6 +33,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
@@ -38,6 +51,16 @@ jobs:
             echo "::error::tag $tag does not match __version__ $version"
             exit 1
           fi
+      # Lint and types run here as well as in `ci.yml`, because a tag can point
+      # at a commit that never reached `main` and so never met those gates. The
+      # wheel ships `py.typed`: the annotations are a promise to everyone who
+      # installs it, and an unchecked one is worse than none.
+      - name: Formatting
+        run: uv run ruff format --check src
+      - name: Lint
+        run: uv run ruff check src
+      - name: Types
+        run: uv run mypy src
       - name: Tests, on the exact commit being published
         run: |
           uv run coverage run -m pytest
@@ -70,6 +93,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Trusted publishing: GitHub proves its own identity to PyPI at the moment
     # of upload, so no API token exists anywhere to be stored or leaked.
     #

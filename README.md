@@ -86,11 +86,25 @@ uv sync
 That creates `.venv` with an `anki-mcp` console script inside it. The path to
 that script is what you register with a host, below.
 
+**Which systems this is known to work on.** Every Python version from 3.10 to
+3.14 has been tested, and all of that testing was done on Windows. The code
+contains nothing platform-specific and there is no reason to expect trouble on
+macOS or Linux, but "no reason to expect trouble" is not the same as a passing
+test, so treat those two as unverified until the CI matrix has run. If you hit
+something on either, it is worth an issue — it will be news.
+
 This is not on PyPI. The repository and the package are both `anki-note-mcp`,
 because `anki-mcp` on PyPI belongs to a different Anki MCP server. The import
 package, the console script and the name this server reports to a host all stay
 `anki-mcp` — renaming those would break every registration that already exists
 and buy nothing, so the mismatch is deliberate and stops there.
+
+One consequence worth knowing: the console script installed here is named
+`anki-mcp`, and that other project installs a command by the same name. In a
+virtual environment of its own, as above, nothing collides. If you ever install
+both into one environment, whichever went in last owns the command — which is
+another reason to register the absolute path to this `.venv` rather than rely on
+a name resolved from PATH.
 
 ### Register with Claude Desktop
 
@@ -307,6 +321,12 @@ uv run pytest                  # offline; the whole gate below runs against fake
 uv run coverage run -m pytest && uv run coverage report
 ```
 
+If you are opening a pull request, use `uv sync --locked` instead. That is what
+CI runs, and it fails rather than quietly resolving when `pyproject.toml` has
+moved without `uv.lock` following it — which is the one dependency mistake that
+would otherwise reach a release. A plain `uv sync` will update the lockfile
+underneath you and you will not find out until CI rejects it.
+
 The offline suite covers the envelope and the typed error boundary, both degraded
 modes and a test that their messages never converge, HTML normalisation, the
 progressive-disclosure guarantees, the exact tool surface and every tool's output
@@ -344,7 +364,7 @@ refused as "empty", and that sixty sequential calls do not drop a connection.
   look like arbitrary style until you know what they cost.
 - **[docs/roadmap.md](docs/roadmap.md)** — the largest known defect stated
   outright, what each of the six refusal wordings means, the loose ends, what was
-  deferred, and the audit findings that were declined with their reasons.
+  deferred, and the review findings that were declined with their reasons.
 
 ---
 

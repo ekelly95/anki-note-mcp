@@ -6,53 +6,10 @@ changes.
 
 [semver]: https://semver.org/spec/v2.0.0.html
 
-## Unreleased
+## 0.1.0 — not yet released
 
-- `anki_update_note` with an empty `fields` object is now refused instead of
-  reported as a success. It used to pass the "nothing to do" check, skip the
-  existence and field-name checks below it, and still reach AnkiConnect — which
-  looks only for the presence of a `fields` key, so it wrote the note back
-  unchanged, moved its modification time and marked it for sync, and the tool
-  answered `updated: true`. An empty `tags` list is unaffected: that is still
-  the way to clear every tag off a note.
-- A `notesInfo` or `modelNames` reply of the wrong shape is now a typed protocol
-  error naming the action. Neither can come from a working AnkiConnect, but
-  unguarded a string reply used to produce a confident wrong answer rather than
-  a failure — "this note does not exist" from a read, an empty result set from
-  a search — and in `anki_list_decks_and_models` it would have asked Anki about
-  every letter of the reply before failing.
-- A malformed environment variable now prints one line and exits, instead of the
-  same message underneath a Python stack trace. The messages already named the
-  variable, its accepted values and what was found; a host shows you a crashed
-  subprocess, so a one-word typo read as a broken server.
-- `anki_add_note` no longer reports a wrong field name as an empty note. When
-  AnkiConnect refuses a note as "empty" — its only word for it, and the wrong one
-  in the common case — the tool now looks up the note type's real field names and
-  says which name does not exist, what the names should have been, and that the
-  rest of the run will fail identically. A genuinely blank first field says that
-  instead, and a refusal it cannot explain reports what it ruled out rather than
-  guessing. The lookup costs one extra call, and only on a refusal.
-- `anki_add_note` also explains `cannot create note for unknown reason`, which
-  the add-on uses for every cloze mismatch and which says nothing at all. It now
-  distinguishes a missing deletion, a deletion whose syntax is broken, one in a
-  field the card template does not read, and a valid deletion on a note type that
-  does not do cloze. The same sentence is used by the guard in the next entry, so
-  what a caller reads never depends on which duplicate scope was asked for.
-- A cloze note whose deletion is missing, malformed, or in the wrong field is
-  now refused before it is written. Under the default `duplicate_scope="deck"`
-  AnkiConnect skips its own cloze check, so such a note used to be written,
-  reported as created, and render a card reading "No cloze 1 found on card" with
-  nothing anywhere saying so. The note type's templates are read once per type
-  per run and cached, so a twenty-card run costs one extra call. This is the only
-  place the server refuses something the add-on would have accepted; the reasons
-  and its deliberate edges are in `docs/roadmap.md`.
-- CI runs the full OS and Python-version matrix on `workflow_dispatch` only;
-  a push or pull request runs Ubuntu on 3.12. A cost decision about billable
-  runner minutes, not a change of intent — see `docs/roadmap.md`.
-
-## 0.1.0
-
-First tagged release. Not published to a package index.
+No tag exists and nothing has been published to a package index, so this section
+describes what is in the repository rather than what anyone has installed.
 
 - Seven tools over AnkiConnect: check the connection, list decks and note types,
   search, read one note, add one note, update one note, and ask Anki to sync.
@@ -73,7 +30,40 @@ First tagged release. Not published to a package index.
 - A URL carrying a username or password is refused at startup, because the URL
   is printed in the startup banner and everything sent to it includes note
   content.
+- A cloze note whose deletion is missing, malformed, or in a field the card
+  template does not read is refused before it is written. Under the default
+  `duplicate_scope="deck"` AnkiConnect skips its own cloze check, so such a note
+  would otherwise be written, reported as created, and render a card reading
+  "No cloze 1 found on card" with nothing anywhere saying so. The note type's
+  templates are read once per type per run and cached, so a twenty-card run
+  costs one extra call. This is the only place the server refuses something the
+  add-on would have accepted; the reasons and its deliberate edges are in
+  `docs/roadmap.md`.
+- A refusal names the real cause instead of repeating the add-on's word for it.
+  AnkiConnect calls a wrong field name an "empty" note, and every cloze mismatch
+  "cannot create note for unknown reason"; `anki_add_note` looks up the note
+  type's real field names and says which name does not exist, what the names
+  should have been, and that the rest of the run will fail identically. Cloze
+  mismatches are distinguished four ways — no deletion, broken syntax, a
+  deletion in an unread field, and a valid deletion on a note type that does not
+  do cloze — and the wording does not depend on which duplicate scope was asked
+  for. The lookup costs one extra call, and only on a refusal.
+- `anki_update_note` with an empty `fields` object is refused rather than
+  reported as a success. AnkiConnect looks only for the presence of a `fields`
+  key, so an empty one writes the note back unchanged, moves its modification
+  time and marks it for sync. An empty `tags` list is unaffected: that is still
+  the way to clear every tag off a note.
 - Protocol errors describe a malformed reply by structure and never quote it.
+  A `notesInfo` or `modelNames` reply of the wrong shape is a typed error naming
+  the action rather than a confident wrong answer — "this note does not exist"
+  from a read, an empty result set from a search — and neither can come from a
+  working AnkiConnect.
+- A malformed environment variable prints one line and exits, rather than the
+  same message underneath a stack trace. The message already named the variable,
+  its accepted values and what was found; a host shows you a crashed subprocess,
+  so a one-word typo would otherwise read as a broken server.
 - Ships `py.typed`, checked by strict mypy. Branch coverage is gated at 100%.
+- CI runs Ubuntu on 3.12 for a push or pull request, and the full three-OS,
+  five-Python grid on `workflow_dispatch` — see `docs/roadmap.md`.
 
 Nothing here deletes a note, changes a card's scheduling, or touches a deck.

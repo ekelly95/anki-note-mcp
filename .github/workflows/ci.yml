@@ -1,9 +1,9 @@
 name: CI
 
-# Every push runs the whole matrix. The package claims OS independence and
-# Python 3.10-3.14 in its classifiers, and a portability claim tested only when
-# somebody remembers to trigger it by hand is a claim about the day they
-# remembered.
+# A push or pull request runs lint, one test leg (Ubuntu on 3.12) and the
+# packaging guards. The full three-OS, five-Python grid backing the OS
+# independence and Python 3.10-3.14 the classifiers claim is `workflow_dispatch`
+# only, for the reason on the `test` job below.
 #
 # The `live` marker is excluded everywhere, and not by accident: those tests
 # write to a real Anki collection over AnkiConnect, and there is no Anki on a
@@ -24,6 +24,12 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    # Every job carries one. The default is six hours, and the two steps most
+    # able to hang here are subprocesses reading a pipe: the wheel smoke test in
+    # `build`, and the entry-point tests in `test`. A hung leg that eventually
+    # times out at fifteen minutes is a nuisance; one that does it at six hours
+    # on a macOS runner is the whole afternoon.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
@@ -48,15 +54,17 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     # The full grid only when asked for by hand. It exists to prove the OS
     # independence and 3.10-3.14 support the classifiers claim, and a claim
-    # about which Pythons work does not change on every push — but the bill
-    # does. Runs on a private repository draw on a monthly minute allowance,
-    # where macOS bills at ten times Linux and Windows at twice: the fifteen-job
-    # grid is roughly 200 billable minutes, about three quarters of it macOS
-    # alone. Ubuntu on one version catches the ordinary mistake for a tenth of
-    # it. On a public repository the allowance does not apply and this split is
-    # worth revisiting rather than keeping out of habit.
+    # about which Pythons work does not change on every push. Ubuntu on one
+    # version catches the ordinary mistake, and finishes in the time of one leg
+    # rather than the slowest of fifteen.
+    #
+    # This split was made when runner minutes were billable and is now kept for
+    # latency alone — a weaker reason than the one it replaced. If the grid
+    # proves fast and stable, promote it to every push rather than keeping the
+    # split out of habit.
     #
     # `&&`/`||` here return the operand rather than a boolean, which is the
     # documented way to pick a matrix per event. Re-prove the grid with
@@ -86,13 +94,24 @@ jobs:
       - run: uv sync --locked --group dev
       # Never piped. A `| tail` that swallows a non-zero exit is how a red run
       # reads as green.
+      #
+      # `shell: bash` is load-bearing on the Windows legs, not a style choice.
+      # The default shell there is pwsh, where a native command exiting non-zero
+      # does NOT abort the script — only the last command's exit code reaches
+      # GitHub. A failing pytest would be overwritten by a passing
+      # `coverage report` and the step would go green. The coverage gate does
+      # not catch it either: a test that fails an assertion still executed the
+      # code it touched, so the percentage holds. Same failure as the piped-exit
+      # one above, by a different route.
       - name: Tests, with the coverage gate
+        shell: bash
         run: |
           uv run coverage run -m pytest
           uv run coverage report
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
@@ -102,11 +121,11 @@ jobs:
       - run: uv build
       - name: Metadata is well formed
         run: uvx twine check dist/*
-      # Unlike the sibling projects, the sdist carries its tests on purpose:
-      # there is no third-party fixture data here with a licence of its own, and
-      # an sdist a packager can run the suite from is worth more than a smaller
-      # one. The exclusion that matters is the wheel's, because that is what
-      # ends up importable in somebody's environment.
+      # The sdist carries its tests on purpose: there is no third-party fixture
+      # data here with a licence of its own, and an sdist a packager can run the
+      # suite from is worth more than a smaller one. The exclusion that matters
+      # is the wheel's, because that is what ends up importable in somebody's
+      # environment.
       - name: No tests escaped into the wheel
         run: |
           python - <<'PY'

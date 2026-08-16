@@ -52,9 +52,11 @@ is not, or to get note content out through an error path.
 ## Out of scope
 
 - **AnkiConnect and Anki vulnerabilities**, which belong to
-  [AnkiConnect](https://github.com/amikey/anki-connect) and
+  [AnkiConnect](https://git.sr.ht/~foosoft/anki-connect) and
   [Anki](https://github.com/ankitects/anki). This server is a client of an
-  endpoint it does not control.
+  endpoint it does not control. AnkiConnect's GitHub repository was archived in
+  November 2025 and the project moved to SourceHut; the several GitHub copies
+  still turned up by a search are forks, and reporting to one reaches nobody.
 - **Anything requiring prior control of the machine.** The collection file is
   readable directly, so an attacker who can run code locally does not need this
   server. That is also why enabling AnkiConnect's own `apiKey` is not treated as
