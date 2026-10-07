@@ -24,6 +24,10 @@ outcome. Measured in `live_test.py`: nineteen created, one rejected, and the
 rejection names itself a duplicate. The cost is twenty round trips; the thing
 bought is that a failure is attributable.
 
+Tagging and deleting are bulk anyway (row 31). That's not an exception to this
+reasoning. It's the same reasoning: they re-read every note afterwards, so their
+failures are attributable too.
+
 **Degraded, not broken.** Anki being closed is a designed state with an
 actionable message naming the add-on to install, not a stack trace. It is
 distinguished from Anki being *open but stuck behind a modal dialog*, which is a
@@ -40,7 +44,7 @@ purpose, with the reason. Nothing here needs the original to be readable.
 Rows 1–9 are defects in the document. Rows 10–16 are judgment calls. Rows 17–22
 were found by running the thing. Rows 23–30 came out of reviewing it once it
 worked, and most of those were settled by reading the add-on's own source rather
-than its documentation.
+than its documentation. Row 31 is a later extension.
 
 Several rows compare against **the sibling servers**: two other MCP servers by
 the same author, written in TypeScript and built either side of this one. They
@@ -81,6 +85,7 @@ subprocess regardless of language.
 | 28 | `to_text` renders every text node | `<style>`/`<script>` contents dropped; `<img>` carries its filename | **Measured:** `to_text('<style>.card { color: red; }</style>Hola')` returned the stylesheet — `html.parser` puts those tags in CDATA mode and hands the raw CSS to `handle_data`. That is the same defect `fields.py` exists to fix, one layer down. The skip flag must not be set from `handle_startendtag`: `<style/>` fires no end tag, so a flag set there swallows the rest of the field — turning a leak into data loss. `[image: wave.png]` because on a vocabulary card the filename is often the meaning; `[sound:]` keeps its bare `[audio]`, since audio usually pronounces text already in the field while an image replaces content that has no other representation. |
 | 29 | Caps are checked against a floor | …and a ceiling | Failing loudly ran in one direction only: `ANKI_MAX_FIELD_CHARS=50000000` was accepted in silence. `ANKI_MAX_SEARCH` is also published to every client as `le=` on `anki_find_notes`'s `limit`, so a fat-fingered value shipped a nonsense schema. The ceilings are generous on purpose — `ANKI_MAX_FIELD_CHARS` is now the only lever that makes a large field editable at all. |
 | 30 | `finally: ctx.anki.close()` | …plus SIGINT/SIGTERM handlers | Python's default for SIGTERM ends the process outright, so the `finally` never ran; both siblings install handlers for the same reason. Honest limit: on Windows a host stops the server with TerminateProcess and no signal is delivered, so this only helps on POSIX. The path that actually runs there is stdin closing, which `entrypoint_test.py` asserts exits 0 with no traceback. |
+| 31 | No delete tool, no bulk tool | `anki_tag_notes` (bulk, by ID) and `anki_delete_notes` (by query, behind `ANKI_ALLOW_DELETE`) | **Added 2026-10-07, for clearing a deck of cards already chosen.** The rule against a batch write comes from `addNotes`'s unattributable nulls, not from batching. `addTags`, `removeTags` and `deleteNotes` all return null whatever happened and skip a missing ID silently, the same shape. So both tools re-read with `notesInfo` afterwards; read from the installed add-on, it answers in request order with `{}` for a missing note, and `_infos_for` refuses a reply of the wrong length rather than letting a note drop out of the report. Selection and purge are split deliberately: tags go on by ID, reversibly, after a model's judgment; deletion goes by query, normally that tag, and only when the match count equals an `expected_count` the user agreed to, so a typo or a note added since deletes nothing. A blank query is refused outright, because Anki reads it as the whole collection. `ANKI_ALLOW_DELETE` is separate from write access for the reason sync is: the one effect here that cannot be undone is granted on its own, and its refusal points at Anki's Browse window first. |
 
 ## Deviations from the sibling servers
 
@@ -110,7 +115,7 @@ the article describing it says it requires no changes from server authors — an
 what it rewards is exactly what this server already is: small tools, no batch
 call, and output bounded per snippet, per field and per response, so nothing
 large passes through a model on its way somewhere else. Building a code-execution
-layer inside a seven-tool server would add a sandbox to defend and change nothing
+layer inside a nine-tool server would add a sandbox to defend and change nothing
 about what the tools return.
 
 **The 2026-07-28 stateless core.** Written for HTTP deployments behind load

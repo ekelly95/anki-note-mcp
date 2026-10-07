@@ -255,3 +255,33 @@ def test_the_two_collection_switches_are_independent() -> None:
     writable = load_config({})
     assert writable.read_only is False
     assert writable.allow_sync is False
+
+
+def test_deleting_is_off_unless_it_is_turned_on() -> None:
+    """Off by default even on a fully writable server, and even with sync on:
+    a deletion is the one write here that cannot be undone."""
+    assert load_config({}).allow_delete is False
+    assert load_config({"ANKI_ALLOW_DELETE": ""}).allow_delete is False
+    assert load_config({"ANKI_READ_ONLY": "0", "ANKI_ALLOW_SYNC": "1"}).allow_delete is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", " on "])
+def test_the_obvious_ways_of_writing_yes_all_enable_delete(value: str) -> None:
+    assert load_config({"ANKI_ALLOW_DELETE": value}).allow_delete is True
+
+
+@pytest.mark.parametrize("value", ["maybe", "2", "please", "y", "off!"])
+def test_an_unrecognised_delete_value_fails_loudly(value: str) -> None:
+    """The setting where guessing wrong costs the most, so it is the last one
+    that should resolve a typo to the permissive reading."""
+    with pytest.raises(ValueError, match="ANKI_ALLOW_DELETE"):
+        load_config({"ANKI_ALLOW_DELETE": value})
+
+
+def test_allowing_delete_grants_nothing_else() -> None:
+    """ANKI_ALLOW_DELETE opens one tool. It neither reopens a read-only
+    collection nor switches sync on."""
+    both = load_config({"ANKI_READ_ONLY": "1", "ANKI_ALLOW_DELETE": "1"})
+    assert both.read_only is True
+    assert both.allow_delete is True
+    assert both.allow_sync is False

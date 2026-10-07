@@ -20,14 +20,20 @@ The thing worth protecting is the collection, and the realistic threats to it ar
 an agent acting confidently on bad information and a shared deck written by a
 stranger. So:
 
-- **There is no destructive tool.** No delete, no deck management, no
-  rescheduling. The three writing tools add one note, change one note's fields or
-  tags, and ask Anki to sync.
-- **Writing is gated, and syncing is gated separately.** `ANKI_READ_ONLY` refuses
-  add, update and sync before any of them reaches AnkiConnect. `ANKI_ALLOW_SYNC`
-  permits sync alone and is off by default even when writes are allowed, because
-  a sync is the only effect that leaves the machine. Unset is the safe value for
-  both, and the flags are parsed strictly rather than truthily.
+- **The one destructive tool is off by default.** `anki_delete_notes` deletes
+  permanently, so it refuses unless `ANKI_ALLOW_DELETE` is set. It also refuses
+  a blank search, and refuses unless the search matches exactly the
+  `expected_count` the caller passes, which its description tells the model to
+  confirm with the user first. An injected instruction would therefore need the
+  setting on and an agreed count to match before anything is lost. There is no
+  deck management and no rescheduling.
+- **Writing is gated, and syncing and deleting are gated separately.**
+  `ANKI_READ_ONLY` refuses add, update, tag, delete and sync before any of them
+  reaches AnkiConnect. `ANKI_ALLOW_SYNC` permits sync alone, because a sync is
+  the only effect that leaves the machine. `ANKI_ALLOW_DELETE` permits delete
+  alone, because a deletion is the only effect that cannot be undone. Unset is
+  the safe value for all three, and the flags are parsed strictly rather than
+  truthily.
 - **Note content is treated as untrusted data.** Every tool that returns content
   says so in the reply, and says it as its own field rather than as delimiters
   around the values — a wrapper the model failed to strip would be written into
@@ -47,7 +53,9 @@ stranger. So:
 
 Please report any way to reach the collection past these guards, to make the
 server write when `ANKI_READ_ONLY` is set, to make it sync when `ANKI_ALLOW_SYNC`
-is not, or to get note content out through an error path.
+is not, to make it delete when `ANKI_ALLOW_DELETE` is not or when the match
+count differs from `expected_count`, or to get note content out through an
+error path.
 
 ## Out of scope
 

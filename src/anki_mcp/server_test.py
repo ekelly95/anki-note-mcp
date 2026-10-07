@@ -26,11 +26,13 @@ from .testing.fake_anki import FakeAnki, fake_anki, unused_port
 
 EXPECTED_TOOLS = [
     "anki_add_note",
+    "anki_delete_notes",
     "anki_find_notes",
     "anki_get_note",
     "anki_list_decks_and_models",
     "anki_status",
     "anki_sync",
+    "anki_tag_notes",
     "anki_update_note",
 ]
 
@@ -59,6 +61,7 @@ def config_for(
     timeout_s: float = 5.0,
     read_only: bool = False,
     allow_sync: bool = False,
+    allow_delete: bool = False,
     max_response_chars: int = 40_000,
 ) -> Config:
     return Config(
@@ -74,6 +77,7 @@ def config_for(
         max_response_chars=max_response_chars,
         read_only=read_only,
         allow_sync=allow_sync,
+        allow_delete=allow_delete,
     )
 
 
@@ -88,6 +92,7 @@ def call_against(
     *,
     read_only: bool = False,
     allow_sync: bool = False,
+    allow_delete: bool = False,
     max_response_chars: int = 40_000,
 ) -> CallToolResult:
     """Run one tool call against a scripted fake AnkiConnect."""
@@ -100,6 +105,7 @@ def call_against(
                 fake.url,
                 read_only=read_only,
                 allow_sync=allow_sync,
+                allow_delete=allow_delete,
                 max_response_chars=max_response_chars,
             )
             ctx = AppContext(config=cfg, anki=AnkiClient(cfg))
@@ -1591,6 +1597,9 @@ WRITE_CALLS: list[tuple[str, dict[str, Any]]] = [
     ),
     ("anki_update_note", {"note_id": 42, "fields": {"Back": "hello"}}),
     ("anki_update_note", {"note_id": 42, "tags": ["hard"]}),
+    ("anki_tag_notes", {"note_ids": [42], "tags": ["hard"]}),
+    ("anki_tag_notes", {"note_ids": [42], "tags": ["hard"], "remove": True}),
+    ("anki_delete_notes", {"query": "tag:hard", "expected_count": 1}),
     ("anki_sync", {}),
 ]
 
@@ -1613,10 +1622,16 @@ def test_read_only_mode_refuses_every_tool_that_changes_the_collection(
         fake.on("addNote", 1234)
         fake.on("notesInfo", [note(42, {"Front": "hola", "Back": "hi"})])
         fake.on("updateNote", None)
+        fake.on("addTags", None)
+        fake.on("removeTags", None)
+        fake.on("findNotes", [42])
+        fake.on("deleteNotes", None)
         fake.on("sync", None)
         captured["fake"] = fake
 
-    result = call_against(setup, tool, args, read_only=True)
+    # Delete allowed too, so its own guard cannot be what stops it: this test
+    # is about read-only alone being enough.
+    result = call_against(setup, tool, args, read_only=True, allow_delete=True)
     assert result.isError is True
     assert "ANKI_READ_ONLY" in text_of(result), "the message must name the setting to unset"
     assert actions_called(captured["fake"]) == [], f"{tool} reached AnkiConnect in read-only mode"
@@ -1717,6 +1732,321 @@ def test_read_only_still_refuses_sync_even_when_sync_is_allowed() -> None:
     assert result.isError is True
     assert "ANKI_READ_ONLY" in text_of(result), "read-only is the broader reason and must be named"
     assert actions_called(captured["fake"]) == []
+
+
+# --- bulk tagging ------------------------------------------------------------
+
+
+def test_tagging_adds_to_many_notes_and_confirms_each_by_rereading() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("addTags", None)
+        fake.on(
+            "notesInfo",
+            [
+                note(1, {"Front": "a"}, tags=["ncsf", "to-delete"]),
+                note(2, {"Front": "b"}, tags=["TO-DELETE"]),
+            ],
+        )
+        captured["fake"] = fake
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": [1, 2], "tags": ["to-delete"]})
+    assert result.isError is False, text_of(result)
+    assert result.structuredContent is not None
+    payload = result.structuredContent
+    assert payload["changed"] == 2, "tags compare case-insensitively, as Anki does"
+    assert payload["not_found"] == []
+    assert payload["unchanged"] == []
+    assert payload["removed"] is False
+
+    fake = captured["fake"]
+    assert actions_called(fake) == ["addTags", "notesInfo"]
+    assert fake.requests[0]["params"] == {"notes": [1, 2], "tags": "to-delete"}
+
+
+def test_several_tags_go_as_one_space_separated_string() -> None:
+    """The add-on's format, not this server's choice."""
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("addTags", None)
+        fake.on("notesInfo", [note(1, {"Front": "a"}, tags=["a", "b"])])
+        captured["fake"] = fake
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": [1], "tags": ["a", "b"]})
+    assert result.isError is False, text_of(result)
+    assert captured["fake"].requests[0]["params"]["tags"] == "a b"
+
+
+def test_removing_tags_uses_remove_and_checks_they_are_gone() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("removeTags", None)
+        fake.on("notesInfo", [note(1, {"Front": "a"}, tags=["keep"])])
+        captured["fake"] = fake
+
+    result = call_against(
+        setup, "anki_tag_notes", {"note_ids": [1], "tags": ["to-delete"], "remove": True}
+    )
+    assert result.isError is False, text_of(result)
+    assert result.structuredContent is not None
+    assert result.structuredContent["changed"] == 1
+    assert result.structuredContent["removed"] is True
+    assert actions_called(captured["fake"]) == ["removeTags", "notesInfo"]
+
+
+def test_a_tag_that_did_not_stick_is_named_rather_than_counted() -> None:
+    """The re-read is the whole reason a bulk write is allowed here, so what
+    it finds must reach the caller rather than being averaged away."""
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("addTags", None)
+        fake.on(
+            "notesInfo",
+            [note(1, {"Front": "a"}, tags=["to-delete"]), note(2, {"Front": "b"}, tags=[])],
+        )
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": [1, 2], "tags": ["to-delete"]})
+    assert result.structuredContent is not None
+    assert result.structuredContent["changed"] == 1
+    assert result.structuredContent["unchanged"] == [2]
+
+
+def test_a_tag_that_would_not_come_off_is_named_too() -> None:
+    def setup(fake: FakeAnki) -> None:
+        fake.on("removeTags", None)
+        fake.on("notesInfo", [note(1, {"Front": "a"}, tags=["to-delete"])])
+
+    result = call_against(
+        setup, "anki_tag_notes", {"note_ids": [1], "tags": ["to-delete"], "remove": True}
+    )
+    assert result.structuredContent is not None
+    assert result.structuredContent["changed"] == 0
+    assert result.structuredContent["unchanged"] == [1]
+
+
+def test_an_id_that_is_not_a_note_is_reported_not_found() -> None:
+    def setup(fake: FakeAnki) -> None:
+        fake.on("addTags", None)
+        fake.on("notesInfo", [note(1, {"Front": "a"}, tags=["x"]), {}])
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": [1, 999], "tags": ["x"]})
+    assert result.structuredContent is not None
+    assert result.structuredContent["changed"] == 1
+    assert result.structuredContent["not_found"] == [999]
+
+
+def test_repeated_ids_are_sent_once() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("addTags", None)
+        fake.on(
+            "notesInfo",
+            [note(3, {"Front": "a"}, tags=["x"]), note(1, {"Front": "b"}, tags=["x"])],
+        )
+        captured["fake"] = fake
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": [3, 1, 3, 1], "tags": ["x"]})
+    assert result.isError is False, text_of(result)
+    assert captured["fake"].requests[0]["params"]["notes"] == [3, 1], "first-seen order kept"
+
+
+@pytest.mark.parametrize("bad", ["two words", "", "tab\there"])
+def test_a_tag_anki_would_split_or_drop_is_refused_before_anything_is_sent(bad: str) -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("addTags", None)
+        captured["fake"] = fake
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": [1], "tags": ["ok", bad]})
+    assert result.isError is True
+    assert "whitespace" in text_of(result)
+    assert actions_called(captured["fake"]) == []
+
+
+def test_tagging_is_capped_at_the_search_limit() -> None:
+    """The same ceiling anki_find_notes publishes, so one page of hits is
+    always one call's worth, and a runaway list is a schema error."""
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        captured["fake"] = fake
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": list(range(1, 52)), "tags": ["x"]})
+    assert result.isError is True
+    assert actions_called(captured["fake"]) == []
+
+
+def test_a_short_notesinfo_reply_is_an_error_not_a_quietly_smaller_report() -> None:
+    def setup(fake: FakeAnki) -> None:
+        fake.on("addTags", None)
+        fake.on("notesInfo", [note(1, {"Front": "a"}, tags=["x"])])
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": [1, 2], "tags": ["x"]})
+    assert result.isError is True
+    assert "cannot be confirmed" in text_of(result)
+
+
+def test_tagging_needs_no_delete_permission() -> None:
+    """Tagging is how a deletion gets prepared safely, so it must work on a
+    server where deleting is still off."""
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("addTags", None)
+        fake.on("notesInfo", [note(1, {"Front": "a"}, tags=["x"])])
+
+    result = call_against(setup, "anki_tag_notes", {"note_ids": [1], "tags": ["x"]})
+    assert result.isError is False, text_of(result)
+
+
+# --- deletion is granted separately, and checked by count -------------------
+
+
+def test_delete_is_refused_unless_it_was_separately_enabled() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [1])
+        fake.on("deleteNotes", None)  # scripted to succeed, so a missing guard deletes
+        captured["fake"] = fake
+
+    result = call_against(setup, "anki_delete_notes", {"query": "tag:x", "expected_count": 1})
+    assert result.isError is True
+    message = text_of(result)
+    assert "ANKI_ALLOW_DELETE" in message, "the message must name the setting to set"
+    assert "Browse" in message, "and say the user can do it themselves in Anki"
+    assert actions_called(captured["fake"]) == []
+
+
+def test_read_only_still_refuses_delete_even_when_delete_is_allowed() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [1])
+        fake.on("deleteNotes", None)
+        captured["fake"] = fake
+
+    result = call_against(
+        setup,
+        "anki_delete_notes",
+        {"query": "tag:x", "expected_count": 1},
+        read_only=True,
+        allow_delete=True,
+    )
+    assert result.isError is True
+    assert "ANKI_READ_ONLY" in text_of(result), "read-only is the broader reason and must be named"
+    assert actions_called(captured["fake"]) == []
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+def test_a_blank_query_is_refused_because_anki_reads_it_as_everything(blank: str) -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [1, 2, 3])
+        fake.on("deleteNotes", None)
+        captured["fake"] = fake
+
+    result = call_against(
+        setup, "anki_delete_notes", {"query": blank, "expected_count": 3}, allow_delete=True
+    )
+    assert result.isError is True
+    assert "whole collection" in text_of(result)
+    assert actions_called(captured["fake"]) == []
+
+
+def test_a_count_that_differs_from_the_agreed_one_deletes_nothing() -> None:
+    """The guard that makes deleting by query safe: a typo, a note added
+    since, a query that drifted. Each arrives as a different number."""
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [1, 2, 3])
+        fake.on("deleteNotes", None)
+        captured["fake"] = fake
+
+    result = call_against(
+        setup, "anki_delete_notes", {"query": "tag:x", "expected_count": 2}, allow_delete=True
+    )
+    assert result.isError is True
+    message = text_of(result)
+    assert "matches 3 notes, not the 2 expected" in message
+    assert "Nothing was deleted" in message
+    assert actions_called(captured["fake"]) == ["findNotes"]
+
+
+def test_a_query_matching_nothing_sends_no_delete() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [])
+        captured["fake"] = fake
+
+    result = call_against(
+        setup, "anki_delete_notes", {"query": "tag:x", "expected_count": 0}, allow_delete=True
+    )
+    assert result.isError is False, text_of(result)
+    assert result.structuredContent is not None
+    assert result.structuredContent["deleted"] == 0
+    assert actions_called(captured["fake"]) == ["findNotes"]
+
+
+def test_deleting_counts_what_is_gone_by_reading_it_back() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [1, 2])
+        fake.on("deleteNotes", None)
+        fake.on("notesInfo", [{}, {}])
+        captured["fake"] = fake
+
+    result = call_against(
+        setup, "anki_delete_notes", {"query": "tag:x", "expected_count": 2}, allow_delete=True
+    )
+    assert result.isError is False, text_of(result)
+    assert result.structuredContent is not None
+    payload = result.structuredContent
+    assert payload["deleted"] == 2
+    assert payload["still_present"] == []
+    assert "permanently" in payload["note"].lower()
+
+    fake = captured["fake"]
+    assert actions_called(fake) == ["findNotes", "deleteNotes", "notesInfo"]
+    assert fake.requests[1]["params"] == {"notes": [1, 2]}
+
+
+def test_a_note_that_survived_the_delete_is_named() -> None:
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [1, 2])
+        fake.on("deleteNotes", None)
+        fake.on("notesInfo", [{}, note(2, {"Front": "b"})])
+
+    result = call_against(
+        setup, "anki_delete_notes", {"query": "tag:x", "expected_count": 2}, allow_delete=True
+    )
+    assert result.structuredContent is not None
+    assert result.structuredContent["deleted"] == 1
+    assert result.structuredContent["still_present"] == [2]
+
+
+def test_a_findnotes_reply_that_is_not_a_list_deletes_nothing() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", "1,2")
+        fake.on("deleteNotes", None)
+        captured["fake"] = fake
+
+    result = call_against(
+        setup, "anki_delete_notes", {"query": "tag:x", "expected_count": 3}, allow_delete=True
+    )
+    assert result.isError is True
+    assert "rather than a list of note IDs" in text_of(result)
+    assert actions_called(captured["fake"]) == ["findNotes"]
 
 
 # --- a stalled Anki must not take the server down with it ------------------

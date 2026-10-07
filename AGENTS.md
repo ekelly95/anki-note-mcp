@@ -13,10 +13,13 @@ Non-negotiable rules:
 - Every request carries `version: 6`, including every sub-action of a `multi`.
 - Search never returns body text, and an oversized field is withheld and named
   rather than truncated.
-- `ANKI_READ_ONLY` closes add, update and sync; `ANKI_ALLOW_SYNC` opens sync
-  alone. Unset is the safe value for both.
-- Never add a retry, and never add a batch write tool. Both fail in ways
-  AnkiConnect gives no way to report.
+- `ANKI_READ_ONLY` closes add, update, tag, delete and sync;
+  `ANKI_ALLOW_SYNC` opens sync alone and `ANKI_ALLOW_DELETE` opens delete alone.
+  Unset is the safe value for all three.
+- Never add a retry, and never add a batch write tool that cannot report each
+  note's outcome. Both fail in ways AnkiConnect gives no way to report. The two
+  bulk tools, `anki_tag_notes` and `anki_delete_notes`, are allowed only because
+  each re-reads every note afterwards; keep it that way.
 - Never add `from __future__ import annotations` to `server.py`. It turns every
   tool registration into `InvalidSignature`.
 - Never re-enable HTTP keep-alive to AnkiConnect.

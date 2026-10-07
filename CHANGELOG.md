@@ -6,6 +6,17 @@ changes.
 
 [semver]: https://semver.org/spec/v2.0.0.html
 
+## Unreleased
+
+- `anki_tag_notes`: add or remove tags on many notes in one call. It is
+  idempotent and reversible, and it re-reads every note afterwards, so the
+  answer names which changed, which do not exist, and which did not take.
+- `anki_delete_notes`: permanently delete the notes matching a search. It is
+  off unless `ANKI_ALLOW_DELETE` is set, which is a new switch parsed as
+  strictly as the other two. It refuses a blank search, and refuses unless the
+  match count equals `expected_count`. The outcome is confirmed by re-reading.
+- `ANKI_READ_ONLY` now also closes both new tools.
+
 ## 0.1.0 — not yet released
 
 No tag exists and nothing has been published to a package index, so this section

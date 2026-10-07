@@ -9,11 +9,14 @@ session produces something worth remembering: the material is already in the
 conversation, and getting it into Anki should not mean leaving, opening Add
 Cards, and retyping it.
 
-There is deliberately **no bulk tool**. Twenty cards is twenty calls. Nothing
-here deletes a note, empties a deck, or changes a card's scheduling, and syncing
-to AnkiWeb is refused unless it is switched on separately.
+There is deliberately **no bulk add**. Twenty cards is twenty calls. Tags can
+be added or removed in bulk, because that write can be checked note by note and
+undone. Deleting notes is refused unless it is switched on separately, and even
+then only for an exact count the user agreed to. Nothing here empties a deck or
+changes a card's scheduling, and syncing to AnkiWeb is refused unless it is
+switched on separately too.
 
-**Status: beta.** All seven tools work end to end against a real collection. The
+**Status: beta.** All nine tools work end to end against a real collection. The
 offline test suite covers every statement and branch; a separate opt-in tier runs
 against a real Anki.
 
@@ -36,7 +39,7 @@ refuses the write. It is the only place here that overrules the add-on.
 The rest follows from the same idea — that a tool should not report a success it
 cannot vouch for:
 
-- **No bulk tool.** `addNotes` returns silent nulls, so a batch can say
+- **No bulk add.** `addNotes` returns silent nulls, so a batch can say
   "thirty-eight of forty" without being able to say which two. One call per note,
   one answer per note.
 - **Bounded output.** Fields are capped per field and per response, and what was
@@ -153,7 +156,7 @@ saying which, rather than an error.
 
 ---
 
-## The seven tools
+## The nine tools
 
 | Tool | What it does |
 |---|---|
@@ -163,6 +166,8 @@ saying which, rather than an error.
 | `anki_get_note` | Read ONE note in full. The only tool that returns body text. A field too large to return whole is named, not cut. |
 | `anki_add_note` | Add ONE note. Checks for duplicates before writing, so a rejection is a result rather than an exception. |
 | `anki_update_note` | Change ONE note's fields and/or tags. Validates field names against the real note first. |
+| `anki_tag_notes` | Add or remove tags on up to `ANKI_MAX_SEARCH` notes at once. Re-reads every note to report which changed, which do not exist, and which did not take. Reversible. |
+| `anki_delete_notes` | PERMANENTLY delete the notes matching a search. Off unless separately enabled, and refuses unless the match count equals the `expected_count` the user agreed to. |
 | `anki_sync` | Ask Anki to sync with AnkiWeb. Off unless separately enabled, and says plainly that it confirms nothing. |
 
 The intended order is four steps, and each one is deliberately cheap:
@@ -195,6 +200,7 @@ Entirely environment-driven, and every value has a default. Set these in the
 | `ANKI_MAX_RESPONSE_CHARS` | `40,000` | 400,000 | Total note content one call may return. |
 | `ANKI_READ_ONLY` | off | — | Refuses every tool that changes anything. |
 | `ANKI_ALLOW_SYNC` | off | — | Permits `anki_sync`, and nothing else. |
+| `ANKI_ALLOW_DELETE` | off | — | Permits `anki_delete_notes`, and nothing else. |
 
 A malformed value fails loudly at startup rather than silently reverting to the
 default — one line on stderr naming the variable, the values it accepts and what
@@ -213,13 +219,19 @@ reported as truncated because every field was individually fine.
 
 ## Safety
 
-- **Nothing here deletes.** There is no delete tool, no deck tool and no
-  scheduling tool. The three writing tools add a note, change a note's fields or
-  tags, and ask Anki to sync.
-- **Two switches guard the collection, and unset is the safe value for both.**
-  `ANKI_READ_ONLY=1` closes add, update and sync together, before any of them
-  reaches AnkiConnect; the four reading tools are unaffected. `ANKI_ALLOW_SYNC`
-  grants sync *only*, and is off by default even on a writable server.
+- **Deleting is off unless you turn it on.** `anki_delete_notes` is the one
+  tool here whose effect cannot be undone — Anki has no trash, and the only way
+  back is restoring a whole-collection backup. It refuses unless
+  `ANKI_ALLOW_DELETE` is set, refuses a blank search (which Anki reads as the
+  whole collection), and refuses unless the search matches exactly the
+  `expected_count` the user agreed to. The safer route needs no switch: tag
+  the notes with `anki_tag_notes`, then delete them yourself in Anki's Browse
+  window. There is still no deck tool and no scheduling tool.
+- **Three switches guard the collection, and unset is the safe value for all of
+  them.** `ANKI_READ_ONLY=1` closes add, update, tag, delete and sync together,
+  before any of them reaches AnkiConnect; the four reading tools are unaffected.
+  `ANKI_ALLOW_SYNC` grants sync *only*, and `ANKI_ALLOW_DELETE` grants delete
+  *only*; both are off by default even on a writable server.
 - **Sync is separated from writing on purpose.** An add or an update is a local
   change, visible in Anki and recoverable from a backup. A sync pushes the
   collection to AnkiWeb and on to every other device, which is the one effect

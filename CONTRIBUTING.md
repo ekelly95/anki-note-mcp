@@ -65,8 +65,10 @@ care about. It is excluded from CI, because there is no Anki on a runner.
 These are settled decisions with reasons recorded, not oversights. Proposing one
 is fine if you have new information; proposing one as a cleanup is not:
 
-- **A batch write tool.** `addNotes` reports failures as silent nulls with no
-  per-item reason, so a batch cannot say which card failed.
+- **A batch add.** `addNotes` reports failures as silent nulls with no
+  per-item reason, so a batch cannot say which card failed. The two bulk tools
+  that do exist, `anki_tag_notes` and `anki_delete_notes`, are allowed only
+  because each re-reads every note afterwards and reports its outcome.
 - **A retry on a failed write.** A lost connection cannot be distinguished from
   a lost reply, so retrying `addNote` risks writing the note twice.
 - **HTTP keep-alive to AnkiConnect.** Measured: it drops calls part way through

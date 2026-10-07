@@ -83,7 +83,8 @@ class Config:
     """
 
     read_only: bool = False
-    """Refuse every tool that changes the collection: add, update and sync.
+    """Refuse every tool that changes the collection: add, update, tag, delete
+    and sync.
 
     Opt-in, so it defaults to False — but the *parsing* is strict, because a
     value this one silently misread would leave a collection writable while
@@ -106,6 +107,17 @@ class Config:
     that is the property worth keeping consistent.
     """
 
+    allow_delete: bool = False
+    """Allow `anki_delete_notes`. Off unless set, even when writes are allowed.
+
+    Split out of `read_only` for the reason `allow_sync` is, and more so. Every
+    other write here can be put back: an add can be deleted, an update edited
+    again, a tag removed. A deletion cannot — Anki has no trash, so the only way
+    back is restoring a whole-collection backup, which also discards everything
+    done since. It is also the capability an injected instruction in a shared
+    deck would most want, so it is granted on its own and never by default.
+    """
+
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
     """Resolve configuration from the environment.
@@ -124,6 +136,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         max_response_chars=_bounded_int(e, "ANKI_MAX_RESPONSE_CHARS", 40_000, MAX_RESPONSE_CHARS),
         read_only=_flag(e, "ANKI_READ_ONLY"),
         allow_sync=_flag(e, "ANKI_ALLOW_SYNC"),
+        allow_delete=_flag(e, "ANKI_ALLOW_DELETE"),
     )
 
 

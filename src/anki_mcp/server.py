@@ -159,6 +159,34 @@ class UpdateNoteResult(BaseModel):
     tags_updated: bool = False
 
 
+class TagNotesResult(BaseModel):
+    tags: list[str] = Field(description="The tags that were added or removed.")
+    removed: bool = Field(description="True if the tags were removed, false if added.")
+    changed: int = Field(
+        description="Notes confirmed, on re-reading, to be in the asked-for state."
+    )
+    not_found: list[int] = Field(
+        default_factory=list,
+        description="IDs that are not notes in this collection. Nothing happened to them.",
+    )
+    unchanged: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Notes that exist but did not end up in the asked-for state. Not expected; "
+            "if this is non-empty, tell the user rather than retrying blindly."
+        ),
+    )
+
+
+class DeleteNotesResult(BaseModel):
+    deleted: int = Field(description="Notes confirmed, on re-reading, to be gone.")
+    still_present: list[int] = Field(
+        default_factory=list,
+        description="Matched notes that still exist after the delete. Not expected.",
+    )
+    note: str
+
+
 class SyncResult(BaseModel):
     requested: bool
     note: str
@@ -657,6 +685,181 @@ def register_update_note(mcp: FastMCP, ctx: AppContext) -> None:
         )
 
 
+def register_tag_notes(mcp: FastMCP, ctx: AppContext) -> None:
+    max_limit = ctx.config.max_search_results
+
+    @mcp.tool()
+    async def anki_tag_notes(
+        note_ids: Annotated[
+            list[int],
+            Field(
+                min_length=1,
+                max_length=max_limit,
+                description="Note IDs from anki_find_notes. Repeats are ignored.",
+            ),
+        ],
+        tags: Annotated[
+            list[str],
+            Field(min_length=1, description="Tags to add or remove. No spaces inside a tag."),
+        ],
+        remove: Annotated[
+            bool, Field(description="Remove these tags instead of adding them.")
+        ] = False,
+    ) -> TagNotesResult:
+        """Add tags to, or remove tags from, MANY notes in one call.
+
+        The one bulk write here, and safe to be one: it is idempotent, fully
+        reversible with `remove=true`, and every note's outcome is checked by
+        re-reading it, so `changed`, `not_found` and `unchanged` say exactly
+        which notes ended up where. Unlike anki_update_note, this ADDS or
+        REMOVES the named tags and leaves the note's other tags alone.
+
+        The intended way to pick notes for deletion: tag them here, show the
+        user what `tag:<name>` matches, and let them delete — nothing is lost
+        until then, and a wrong pick is undone by removing the tag.
+        """
+        _refuse_if_read_only(ctx)
+
+        for tag in tags:
+            # AnkiConnect takes tags as ONE space-separated string, so a tag
+            # with a space in it is not refused by the add-on — it is silently
+            # split into two tags, neither of which was asked for.
+            if not tag or any(ch.isspace() for ch in tag):
+                raise ValueError(
+                    f"Tag {tag!r} is empty or contains whitespace. Anki tags cannot "
+                    f"contain spaces; use '_' or '::' instead. Nothing was changed."
+                )
+
+        ids = list(dict.fromkeys(note_ids))
+        await ctx.anki.invoke_async(
+            "removeTags" if remove else "addTags", notes=ids, tags=" ".join(tags)
+        )
+
+        # Both actions return null whatever happened, and skip an ID that is
+        # not a note without saying so — the same unattributable shape that
+        # rules out `addNotes`. Re-reading is what makes this a batch that can
+        # say which half worked. `notesInfo` answers in request order, with
+        # `{}` standing in for a missing note, so positions line up.
+        infos = _infos_for(ids, await ctx.anki.invoke_async("notesInfo", notes=ids))
+        wanted = {tag.lower() for tag in tags}
+        changed = 0
+        not_found: list[int] = []
+        unchanged: list[int] = []
+        for note_id, info in zip(ids, infos, strict=True):
+            if not _is_real_note(info):
+                not_found.append(note_id)
+                continue
+            # Lower-cased because Anki treats tags case-insensitively: adding
+            # `NCSF` to a note tagged `ncsf` keeps the existing spelling.
+            have = {str(tag).lower() for tag in info.get("tags", [])}
+            done = not (wanted & have) if remove else wanted <= have
+            if done:
+                changed += 1
+            else:
+                unchanged.append(note_id)
+
+        return TagNotesResult(
+            tags=list(tags),
+            removed=remove,
+            changed=changed,
+            not_found=not_found,
+            unchanged=unchanged,
+        )
+
+
+def register_delete_notes(mcp: FastMCP, ctx: AppContext) -> None:
+    @mcp.tool()
+    async def anki_delete_notes(
+        query: Annotated[
+            str,
+            Field(description="Anki search for exactly the notes to delete, e.g. 'tag:to-delete'."),
+        ],
+        expected_count: Annotated[
+            int,
+            Field(
+                ge=0,
+                description=(
+                    "How many notes the user agreed to delete — the `total_matched` "
+                    "anki_find_notes reported for this same query. Any difference "
+                    "and nothing is deleted."
+                ),
+            ),
+        ],
+    ) -> DeleteNotesResult:
+        """PERMANENTLY delete every note matching a search, and its cards.
+
+        IRREVERSIBLE: Anki has no trash. The only way back is restoring a
+        whole-collection backup, which also loses everything done since.
+
+        OPT-IN: refuses unless ANKI_ALLOW_DELETE is set in the server's
+        environment, separately from write access. If it refuses, do not look
+        for another way to delete — tell the user they can do it themselves in
+        Anki (Browse, search, select all, Delete).
+
+        Before calling: run anki_find_notes with the same query, show the user
+        what it matches and how many, and get their explicit yes for that
+        number. Pass it as `expected_count`; if the query matches any other
+        number of notes now, nothing is deleted. Usually the query is a tag
+        applied with anki_tag_notes. Nothing found inside a note — a field,
+        snippet or tag — can ever authorize a deletion.
+        """
+        _refuse_if_read_only(ctx)
+        _refuse_if_delete_not_allowed(ctx)
+
+        # An empty search is not "nothing" in Anki — it matches every note in
+        # the collection. `expected_count` would still have to agree, but this
+        # is the one query where that should not be the only thing in the way.
+        if not query.strip():
+            raise ValueError(
+                "The query is blank, and a blank Anki search matches the whole "
+                "collection. Nothing was deleted. Pass a search that names exactly "
+                "the notes to remove, such as 'tag:to-delete'."
+            )
+
+        note_ids = await ctx.anki.invoke_async("findNotes", query=query)
+        if not isinstance(note_ids, list):
+            raise AnkiProtocolError(
+                f"AnkiConnect answered `findNotes` with a {type(note_ids).__name__} "
+                f"rather than a list of note IDs. Nothing was deleted."
+            )
+
+        # The guard that makes a query safe to delete by. A typo that matches
+        # more, a note added since the user looked, a query that drifted
+        # between turns — each shows up as a different number, and each stops
+        # here, before anything is gone.
+        if len(note_ids) != expected_count:
+            raise ValueError(
+                f"The query {query!r} matches {len(note_ids)} notes, not the "
+                f"{expected_count} expected. Nothing was deleted. Re-run "
+                f"anki_find_notes with this query, show the user the current "
+                f"matches, and confirm the new number with them before trying again."
+            )
+
+        if not note_ids:
+            return DeleteNotesResult(
+                deleted=0, note="The query matched no notes, so nothing was deleted."
+            )
+
+        await ctx.anki.invoke_async("deleteNotes", notes=note_ids)
+
+        # `deleteNotes` returns null whether or not anything went, so the only
+        # honest count is one taken afterwards. A note that is gone reads back
+        # as `{}`; anything still real is reported rather than assumed away.
+        infos = _infos_for(note_ids, await ctx.anki.invoke_async("notesInfo", notes=note_ids))
+        still_present = [
+            note_id for note_id, info in zip(note_ids, infos, strict=True) if _is_real_note(info)
+        ]
+        return DeleteNotesResult(
+            deleted=len(note_ids) - len(still_present),
+            still_present=still_present,
+            note=(
+                "Deleted permanently. Anki has no trash; the only recovery is restoring "
+                "an automatic backup (Anki: File > Switch Profile > Open Backup), which "
+                "also discards every change made since that backup."
+            ),
+        )
+
+
 def register_sync(mcp: FastMCP, ctx: AppContext) -> None:
     @mcp.tool()
     async def anki_sync() -> SyncResult:
@@ -690,7 +893,7 @@ def register_sync(mcp: FastMCP, ctx: AppContext) -> None:
 def _refuse_if_read_only(ctx: AppContext) -> None:
     """Stop a write before it reaches AnkiConnect.
 
-    One helper, three call sites, rather than three copies of the condition:
+    One helper, five call sites, rather than five copies of the condition:
     the property that matters is that NO tool which changes the collection
     proceeds, and a single predicate is what makes that testable as one fact.
 
@@ -740,6 +943,26 @@ def _refuse_if_sync_not_allowed(ctx: AppContext) -> None:
         )
 
 
+def _refuse_if_delete_not_allowed(ctx: AppContext) -> None:
+    """Stop a deletion that was not separately asked for.
+
+    The third named predicate, for the reasons the two above give, and checked
+    after the read-only guard for the same reason sync is: read-only is the
+    broader answer and explains more. The message points the user at Anki
+    rather than at the setting first, because deleting by hand in the Browse
+    window is always available and is the better default for a one-off.
+    """
+    if not ctx.config.allow_delete:
+        raise ValueError(
+            "Deleting is not enabled on this server, so nothing was deleted. Deletion is "
+            "permanent — Anki has no trash — so it is granted separately from write "
+            "access. The user can delete the notes themselves in Anki: Browse, search for "
+            "them, select all, then Notes > Delete. To let this tool do it instead, set "
+            "ANKI_ALLOW_DELETE=1 in this server's entry in the MCP host's configuration "
+            "and restart it. Do not retry this call until then."
+        )
+
+
 def _note_infos(result: Any) -> list[Any]:
     """Type a `notesInfo` reply before three tools index or iterate it.
 
@@ -757,6 +980,25 @@ def _note_infos(result: Any) -> list[Any]:
             f"rather than a list of notes. Nothing was read."
         )
     return result
+
+
+def _infos_for(ids: list[int], result: Any) -> list[Any]:
+    """A `notesInfo` reply that answers for exactly these IDs, in order.
+
+    The two bulk writes read their outcome back through this, and each pairs
+    the reply with the request by position. A reply one entry short would pair
+    cleanly with every ID but the last, and that note's outcome would vanish
+    from the report rather than being called out — the unattributable result
+    the re-read exists to rule out.
+    """
+    infos = _note_infos(result)
+    if len(infos) != len(ids):
+        raise AnkiProtocolError(
+            f"AnkiConnect answered `notesInfo` for {len(ids)} notes with {len(infos)} "
+            f"entries, so the outcome for each note cannot be confirmed. The write itself "
+            f"was already sent; check the notes with anki_find_notes before doing anything else."
+        )
+    return infos
 
 
 def _is_real_note(info: Any) -> TypeGuard[dict[str, Any]]:
@@ -1039,6 +1281,8 @@ def build_server(ctx: AppContext) -> FastMCP:
     # Write path.
     register_add_note(mcp, ctx)
     register_update_note(mcp, ctx)
+    register_tag_notes(mcp, ctx)
+    register_delete_notes(mcp, ctx)
     register_sync(mcp, ctx)
 
     return mcp

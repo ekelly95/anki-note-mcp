@@ -27,23 +27,32 @@ if it does not, the missing test is the first thing to write.
    for it. This is structural, not conventional, so a refactor cannot regress it.
 6. **A missing note is `found: false`, never a crash.** `notesInfo` returns
    `[{}]`, not `[]`.
-7. **The tool surface is exactly seven tools,** each with an output schema. A
+7. **The tool surface is exactly nine tools,** each with an output schema. A
    tool added without a deliberate decision is scope creep, and `server_test.py`
    is what notices.
 8. **A failure arrives as something the model can act on** — an `isError` result
    carrying the message — never as a protocol-level fault.
 9. **An oversized field is withheld and named, never truncated,** and a value
    still bearing the truncation marker is refused on write.
-10. **`ANKI_READ_ONLY` closes add, update and sync before they reach
-    AnkiConnect; `ANKI_ALLOW_SYNC` opens sync and nothing else.** Unset is the
-    safe value for both, and both are parsed strictly rather than truthily.
+10. **`ANKI_READ_ONLY` closes add, update, tag, delete and sync before they
+    reach AnkiConnect; `ANKI_ALLOW_SYNC` opens sync and nothing else, and
+    `ANKI_ALLOW_DELETE` opens delete and nothing else.** Unset is the safe value
+    for all three, and all three are parsed strictly rather than truthily.
+11. **A deletion needs an agreed count.** `anki_delete_notes` refuses a blank
+    query and refuses unless the match count equals `expected_count`, and in
+    both cases nothing reaches `deleteNotes`.
 
 ## Deliberate choices
 
 Each is a decision plus the failure mode of the obvious alternative.
 
-- **No batch tool.** `addNotes` reports failures as nulls with no per-item
-  reason, so a batch that half works cannot say which half.
+- **No batch add.** `addNotes` reports failures as nulls with no per-item
+  reason, so a batch that half works cannot say which half. The two bulk tools
+  that do exist, `anki_tag_notes` and `anki_delete_notes`, are the exception
+  because each re-reads every note through `_infos_for` after writing, so the
+  answer is per note. Both writes are also idempotent, so a lost reply is safe
+  to check and repeat. A bulk tool that cannot do both of those does not belong
+  here.
 - **No retries, anywhere.** A retry clears neither a modal dialog nor App Nap. It
   also cannot be made safe for `addNote`, because a lost reply is
   indistinguishable from an undelivered request.
@@ -86,7 +95,7 @@ src/anki_mcp/
   context.py         AppContext {config, anki}; the injection seam
   fields.py          HTML to visible text; snippet, truncate, TRUNCATION_SUFFIX
   client.py          the only code that touches httpx or JSON; one choke point
-  server.py          the seven tools, their result models, build_server, main
+  server.py          the nine tools, their result models, build_server, main
   testing/
     fake_anki.py     a real HTTP server standing in for AnkiConnect
   *_test.py          beside the module each one tests
