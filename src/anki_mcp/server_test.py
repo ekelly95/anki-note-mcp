@@ -1177,6 +1177,26 @@ def test_a_valid_deletion_on_a_non_cloze_type_explains_the_other_direction() -> 
     assert "does not build cards from" in reason
 
 
+def test_a_refusal_on_a_non_cloze_type_with_no_deletion_names_cloze_without_guessing() -> None:
+    """Neither direction can be read from the note, so it gets the generic
+    message rather than a claim about which side is wrong.
+
+    The test below reaches the same line, but only by an exception thrown into
+    the coroutine, and CPython 3.11 emits no trace event when it resumes one
+    that way. Coverage then misses the line on 3.11 alone; this path does not
+    depend on it."""
+    reason = reason_of(
+        add_cloze_note(
+            {"Front": "el pato", "Back": "the duck"},
+            templates=BASIC_TEMPLATES,
+            model="Basic",
+            verdict=CLOZE_VERDICT,
+        )[0]
+    )
+    assert "unknown reason" in reason
+    assert "does not build cards from" not in reason
+
+
 def test_a_refusal_with_no_readable_templates_still_beats_unknown_reason() -> None:
     """The last fallback. Without the templates the direction cannot be
     established, but naming cloze at all is worth more than 'unknown reason'."""

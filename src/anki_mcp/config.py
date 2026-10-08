@@ -20,6 +20,7 @@ reverting to a default.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -170,6 +171,11 @@ def _checked_url(url: str) -> str:
         # otherwise reached httpx as `InvalidURL`, which is no `TransportError`
         # and so escaped the client untyped on the first tool call.
         parsed.port  # noqa: B018
+        # `urlsplit` checks a bracketed host only from 3.10.12 and 3.11.4, and
+        # 3.10.11 is the last 3.10 with a Windows installer. There `[oops]` got
+        # through to httpx as the same untyped `InvalidURL`, so check it here.
+        if parsed.netloc.rpartition("@")[2].startswith("["):
+            ipaddress.IPv6Address(parsed.hostname or "")
     except ValueError as exc:
         # Not echoing the value: an unparseable URL can still contain a password.
         raise ValueError(f"ANKI_CONNECT_URL is not a valid URL: {exc}.") from exc

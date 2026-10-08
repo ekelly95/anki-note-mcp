@@ -234,6 +234,12 @@ def test_a_url_with_no_usable_host_or_port_fails_at_startup(url: str) -> None:
         load_config({"ANKI_CONNECT_URL": url})
 
 
+def test_a_bracketed_ipv6_host_is_still_accepted() -> None:
+    """The bracket check exists for patch releases whose parser lets `[oops]`
+    through. It must not take real IPv6 loopback down with it."""
+    assert load_config({"ANKI_CONNECT_URL": "http://[::1]:8765"}).url == "http://[::1]:8765"
+
+
 def test_an_unparseable_url_is_not_echoed_back_either() -> None:
     """The same reasoning as the userinfo message, and the easier one to get
     wrong: a URL can be both credential-carrying and unparseable, and this
