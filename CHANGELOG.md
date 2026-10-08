@@ -6,35 +6,32 @@ changes.
 
 [semver]: https://semver.org/spec/v2.0.0.html
 
-## Unreleased
+## 0.1.0 — 2026-10-08
 
+The first release.
+
+- Nine tools over AnkiConnect: check the connection, list decks and note types,
+  search, read one note, add one note, update one note, tag many notes, delete
+  the notes matching a search, and ask Anki to sync.
+- One call per note for adds and edits, deliberately. `addNotes` reports
+  failures as silent nulls with no per-item reason, so there is no bulk add and
+  each card carries its own outcome.
 - `anki_tag_notes`: add or remove tags on many notes in one call. It is
   idempotent and reversible, and it re-reads every note afterwards, so the
   answer names which changed, which do not exist, and which did not take.
 - `anki_delete_notes`: permanently delete the notes matching a search. It is
-  off unless `ANKI_ALLOW_DELETE` is set, which is a new switch parsed as
-  strictly as the other two. It refuses a blank search, and refuses unless the
-  match count equals `expected_count`. The outcome is confirmed by re-reading.
-- `ANKI_READ_ONLY` now also closes both new tools.
-
-## 0.1.0 — not yet released
-
-No tag exists and nothing has been published to a package index, so this section
-describes what is in the repository rather than what anyone has installed.
-
-- Seven tools over AnkiConnect: check the connection, list decks and note types,
-  search, read one note, add one note, update one note, and ask Anki to sync.
-- One call per note, deliberately. `addNotes` reports failures as silent nulls
-  with no per-item reason, so there is no bulk tool at all and each card carries
-  its own outcome.
+  off unless `ANKI_ALLOW_DELETE` is set. It refuses a blank search, and refuses
+  unless the match count equals `expected_count`. The outcome is confirmed by
+  re-reading.
 - Reads are progressively cheaper than the thing they lead to: search returns
   snippets and never body text, and a whole response is bounded as well as each
   field.
 - A field too large to return whole is withheld and named rather than truncated,
   because a truncated value written back would destroy everything past the cap.
-- Two independent guards, both safe when unset. `ANKI_READ_ONLY` closes add,
-  update and sync together; `ANKI_ALLOW_SYNC` grants sync alone, and is off by
-  default even on a writable server.
+- Three independent guards, all safe when unset. `ANKI_READ_ONLY` closes add,
+  update, tag, delete and sync together; `ANKI_ALLOW_SYNC` grants sync alone and
+  `ANKI_ALLOW_DELETE` grants delete alone, and both are off by default even on a
+  writable server.
 - Anki being closed and Anki being stuck behind a modal dialog are distinct
   answers with distinct remedies, and a lost connection tells the caller to
   retry only where retrying is safe.
@@ -83,6 +80,8 @@ describes what is in the repository rather than what anyone has installed.
   refuse correct notes, and `{{edit:cloze:Text}}` turned the guard off.
 - Ships `py.typed`, checked by strict mypy. Branch coverage is gated at 100%.
 - CI runs Ubuntu on 3.12 for a push or pull request, and the full three-OS,
-  five-Python grid on `workflow_dispatch` — see `docs/roadmap.md`.
+  five-Python grid on `workflow_dispatch` — see `docs/roadmap.md`. That grid
+  passed on Windows, macOS and Linux, 3.10 to 3.14, before this release.
 
-Nothing here deletes a note, changes a card's scheduling, or touches a deck.
+Nothing here changes a card's scheduling or touches a deck, and nothing deletes a
+note unless `ANKI_ALLOW_DELETE` is set.

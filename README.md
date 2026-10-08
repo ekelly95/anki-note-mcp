@@ -89,14 +89,13 @@ uv sync
 That creates `.venv` with an `anki-mcp` console script inside it. The path to
 that script is what you register with a host, below.
 
-**Which systems this is known to work on.** Every Python version from 3.10 to
-3.14 has been tested, and all of that testing was done on Windows. The code
-contains nothing platform-specific and there is no reason to expect trouble on
-macOS or Linux, but "no reason to expect trouble" is not the same as a passing
-test, so treat those two as unverified until the CI matrix has run. If you hit
-something on either, it is worth an issue — it will be news.
+**Which systems this is known to work on.** The offline suite passes on
+Windows, macOS and Linux under every Python version from 3.10 to 3.14. Use
+against a real Anki has been on Windows only, so if you hit something on macOS
+or Linux, it is worth an issue — it will be news.
 
-This is not on PyPI. The repository and the package are both `anki-note-mcp`,
+It is also on PyPI, as `uv tool install anki-note-mcp`; the clone above is what
+the rest of this page assumes. The repository and the package are both `anki-note-mcp`,
 because `anki-mcp` on PyPI belongs to a different Anki MCP server. The import
 package, the console script and the name this server reports to a host all stay
 `anki-mcp` — renaming those would break every registration that already exists

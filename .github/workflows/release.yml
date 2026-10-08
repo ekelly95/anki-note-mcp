@@ -5,13 +5,10 @@ name: Release
 # which a tag push does not match — so the guards protecting the artefact are
 # repeated here rather than assumed to have run.
 #
-# NOTE: nothing has been published from this repository, and none of what this
-# needs exists yet. Before the first tag is pushed, PyPI needs an account, a
-# pending publisher bound to project `anki-note-mcp` / owner `ekelly95` /
+# PyPI trusts exactly one publisher for `anki-note-mcp`: owner `ekelly95` /
 # repository `anki-note-mcp` / workflow `release.yml` / environment `pypi`, and
-# that GitHub environment must exist. Renaming this file or that environment
-# breaks publishing with an authentication error that looks nothing like the
-# cause.
+# that GitHub environment exists. Renaming this file or that environment breaks
+# publishing with an authentication error that looks nothing like the cause.
 #
 # Pushing a `v*` tag before all of that exists does not fail early: `build` goes
 # green and `publish` then fails at the OIDC exchange. Do not tag to test this
