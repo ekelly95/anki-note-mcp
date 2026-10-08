@@ -150,7 +150,10 @@ def _checked_url(url: str) -> str:
     API key. Refusing the form here is one guard at the boundary, which is why
     no redaction helper is needed at the places the URL gets formatted.
 
-    Neither check constrains the *host*. Pointing this at a remote AnkiConnect
+    A missing host or an unusable port is also refused here, so that it fails at
+    startup rather than on the first tool call.
+
+    None of these checks restricts *which* host. Pointing this at a remote AnkiConnect
     stays possible on purpose: it is a supported deployment, the person setting
     the variable is the person whose collection it is, and a loopback allowlist
     would only be an escape hatch to write past.
@@ -163,6 +166,10 @@ def _checked_url(url: str) -> str:
 
     try:
         parsed = urlsplit(url)
+        # `urlsplit` defers the port, so read it here: `:abc` or `:99999`
+        # otherwise reached httpx as `InvalidURL`, which is no `TransportError`
+        # and so escaped the client untyped on the first tool call.
+        parsed.port  # noqa: B018
     except ValueError as exc:
         # Not echoing the value: an unparseable URL can still contain a password.
         raise ValueError(f"ANKI_CONNECT_URL is not a valid URL: {exc}.") from exc
@@ -176,6 +183,12 @@ def _checked_url(url: str) -> str:
             "at startup. AnkiConnect authenticates with its own `apiKey` setting; "
             f"put that in ANKI_CONNECT_API_KEY instead. The default URL is {DEFAULT_URL}."
         )
+
+    if not parsed.hostname:
+        # After the userinfo check, so `http://user:pw@/` still gets the message
+        # about credentials. Without this, every call failed as "Anki may have
+        # been closed", which sends the reader to Anki rather than to the config.
+        raise ValueError(f"ANKI_CONNECT_URL has no host. The AnkiConnect default is {DEFAULT_URL}.")
 
     return url
 

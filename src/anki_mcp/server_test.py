@@ -63,12 +63,13 @@ def config_for(
     allow_sync: bool = False,
     allow_delete: bool = False,
     max_response_chars: int = 40_000,
+    max_search_results: int = 50,
 ) -> Config:
     return Config(
         url=url,
         api_key=None,
         timeout_s=timeout_s,
-        max_search_results=50,
+        max_search_results=max_search_results,
         snippet_chars=120,
         max_field_chars=5000,
         # Overridable because at the defaults the response budget and the result
@@ -94,6 +95,7 @@ def call_against(
     allow_sync: bool = False,
     allow_delete: bool = False,
     max_response_chars: int = 40_000,
+    max_search_results: int = 50,
 ) -> CallToolResult:
     """Run one tool call against a scripted fake AnkiConnect."""
     captured: dict[str, CallToolResult] = {}
@@ -107,6 +109,7 @@ def call_against(
                 allow_sync=allow_sync,
                 allow_delete=allow_delete,
                 max_response_chars=max_response_chars,
+                max_search_results=max_search_results,
             )
             ctx = AppContext(config=cfg, anki=AnkiClient(cfg))
             # FastMCP exposes the low-level server it wraps only as _mcp_server;
@@ -453,6 +456,29 @@ def test_search_reports_the_true_match_count_even_when_capped() -> None:
     assert result.structuredContent is not None
     assert result.structuredContent["total_matched"] == 100
     assert result.structuredContent["returned"] == 3
+
+
+def test_an_omitted_limit_still_respects_a_lower_ceiling() -> None:
+    """Pydantic does not validate defaults, so a default of 20 under
+    ANKI_MAX_SEARCH=3 hydrated 20 notes past a "hard ceiling" of 3, and the
+    published schema offered a default its own maximum forbids."""
+    seen: dict[str, Any] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", list(range(1, 11)))
+        fake.on("notesInfo", [note(i, {"Front": f"card {i}"}) for i in range(1, 4)])
+        seen["fake"] = fake
+
+    call_against(setup, "anki_find_notes", {"query": "deck:Default"}, max_search_results=3)
+    notes_info_calls = [r for r in seen["fake"].requests if r["action"] == "notesInfo"]
+    assert len(notes_info_calls[0]["params"]["notes"]) == 3
+
+    cfg = config_for("http://127.0.0.1:8765", max_search_results=3)
+    ctx = AppContext(config=cfg, anki=AnkiClient(cfg))
+    tools = asyncio.run(build_server(ctx).list_tools())
+    ctx.anki.close()
+    limit = next(t for t in tools if t.name == "anki_find_notes").inputSchema["properties"]["limit"]
+    assert limit["default"] <= limit["maximum"] == 3
 
 
 def test_search_asks_ankiconnect_for_only_the_capped_ids() -> None:
@@ -1009,6 +1035,31 @@ def test_the_cloze_field_comes_from_the_template_not_the_first_field() -> None:
     assert "addNote" not in actions
     assert "'Sentence'" in reason
     assert "'Prompt'" not in reason, "it named the first field rather than the cloze field"
+
+
+def test_a_filter_after_cloze_does_not_become_part_of_the_field_name() -> None:
+    """In `{{cloze:furigana:Text}}` the field is the LAST segment. Capturing
+    everything after `cloze:` asked for a field called 'furigana:Text', found
+    nothing, and refused a correct note. This is the one guard that overrules
+    the add-on, so a false refusal here is the expensive direction."""
+    result, actions = add_cloze_note(
+        {"Text": "el {{c1::perro}}", "Back Extra": ""},
+        templates={"Cloze": {"Front": "{{cloze:furigana:Text}}", "Back": ""}},
+    )
+    assert result.isError is False
+    assert "addNote" in actions, "a valid cloze note was refused"
+
+
+def test_a_filter_before_cloze_still_switches_the_guard_on() -> None:
+    """`{{edit:cloze:Text}}` comes from a widely used add-on, and Anki treats
+    it as a cloze template. Requiring `cloze` to be the first filter left the
+    guard off for those note types without saying so."""
+    result, actions = add_cloze_note(
+        {"Text": "no deletion here", "Back Extra": ""},
+        templates={"Cloze": {"Front": "{{edit:cloze:Text}}", "Back": ""}},
+    )
+    assert "addNote" not in actions, "a note that would render an error card was written"
+    assert "'Text'" in reason_of(result)
 
 
 def test_a_valid_cloze_note_is_written_untouched() -> None:

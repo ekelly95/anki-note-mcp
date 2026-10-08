@@ -73,6 +73,14 @@ describes what is in the repository rather than what anyone has installed.
   same message underneath a stack trace. The message already named the variable,
   its accepted values and what was found; a host shows you a crashed subprocess,
   so a one-word typo would otherwise read as a broken server.
+- An `ANKI_CONNECT_URL` with no host or an unusable port (`:abc`, `:99999`) is
+  refused at startup. Before, a bad port escaped the client as an untyped httpx
+  error on the first call, and a missing host was reported as Anki being closed.
+- Leaving out `limit` on `anki_find_notes` no longer goes past `ANKI_MAX_SEARCH`
+  when that is set below 20. The default is now clamped to the ceiling.
+- The cloze guard reads a note type's template the way Anki does, with the field
+  as the last segment of a filter chain. `{{cloze:furigana:Text}}` used to
+  refuse correct notes, and `{{edit:cloze:Text}}` turned the guard off.
 - Ships `py.typed`, checked by strict mypy. Branch coverage is gated at 100%.
 - CI runs Ubuntu on 3.12 for a push or pull request, and the full three-OS,
   five-Python grid on `workflow_dispatch` — see `docs/roadmap.md`.

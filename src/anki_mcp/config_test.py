@@ -215,6 +215,25 @@ def test_a_url_the_parser_itself_rejects_fails_at_startup(url: str) -> None:
         load_config({"ANKI_CONNECT_URL": url})
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:abc",  # not a number
+        "http://127.0.0.1:99999",  # out of range
+        "http://",  # no host at all
+        "http://:8765",  # a port with nothing to attach it to
+    ],
+)
+def test_a_url_with_no_usable_host_or_port_fails_at_startup(url: str) -> None:
+    """`urlsplit` accepts all of these without complaint, and then each one
+    failed only when a tool ran. A bad port reached httpx as `InvalidURL`, which
+    is not a `TransportError`, so it escaped the client untyped and made
+    `anki_status` raise. A missing host was reported as "Anki may have been
+    closed". Neither says what is actually wrong, which is the config."""
+    with pytest.raises(ValueError, match="ANKI_CONNECT_URL"):
+        load_config({"ANKI_CONNECT_URL": url})
+
+
 def test_an_unparseable_url_is_not_echoed_back_either() -> None:
     """The same reasoning as the userinfo message, and the easier one to get
     wrong: a URL can be both credential-carrying and unparseable, and this

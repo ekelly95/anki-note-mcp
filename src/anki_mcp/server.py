@@ -259,6 +259,9 @@ def register_list_decks_and_models(mcp: FastMCP, ctx: AppContext) -> None:
 
 def register_find_notes(mcp: FastMCP, ctx: AppContext) -> None:
     max_limit = ctx.config.max_search_results
+    # Clamped because Pydantic does not validate defaults: under
+    # ANKI_MAX_SEARCH=5 a bare 20 hydrated 20 notes past the ceiling.
+    default_limit = min(20, max_limit)
     budget = ctx.config.max_response_chars
 
     @mcp.tool()
@@ -267,7 +270,7 @@ def register_find_notes(mcp: FastMCP, ctx: AppContext) -> None:
             str,
             Field(description="Anki search syntax, e.g. 'deck:Spanish tag:verb', 'front:*ser*'."),
         ],
-        limit: Annotated[int, Field(ge=1, le=max_limit)] = 20,
+        limit: Annotated[int, Field(ge=1, le=max_limit)] = default_limit,
     ) -> FindNotesResult:
         """Search notes and get back IDs plus a short preview of each.
 
@@ -1123,7 +1126,10 @@ async def _explain_empty_note(
 
 # Anki's card templates read a cloze field as `{{cloze:Text}}`. `cloze-only` is
 # the other form the renderer accepts and reads the same field, so both count.
-_CLOZE_TEMPLATE_RE = re.compile(r"\{\{cloze(?:-only)?:([^}]+)\}\}")
+# Filters chain, and the field is always the LAST segment: `{{edit:cloze:Text}}`
+# and `{{cloze:furigana:Text}}` both read `Text`. Capturing everything after
+# `cloze:` named a field that does not exist and refused a correct note.
+_CLOZE_TEMPLATE_RE = re.compile(r"\{\{(?:[^{}:]*:)*?cloze(?:-only)?:(?:[^{}:]*:)*([^{}:]+)\}\}")
 
 # The fallback when the templates cannot be read, so the direction cannot be
 # established. Still worth far more than 'for unknown reason' on its own.

@@ -309,6 +309,20 @@ describing it says outright that it needs no changes from server authors. What
 it rewards is small, composable tools with bounded output, which is what this
 server already is. Recorded here so it is not re-argued.
 
+## Fixed: three defects from a 2026-10-08 audit
+
+Each one was reproduced before it was fixed, and each has a test that failed
+first. An `ANKI_CONNECT_URL` with a bad port escaped the client as
+`httpx.InvalidURL`, which is not a `TransportError`, and made `anki_status`
+raise. A URL with no host read as "Anki may have been closed". Both are now
+refused in `_checked_url`. `anki_find_notes` published `default: 20` beside a
+smaller `maximum`, and Pydantic does not validate defaults, so an omitted
+`limit` went past `ANKI_MAX_SEARCH`. `_CLOZE_TEMPLATE_RE` took everything after
+`cloze:` as the field name, so `{{cloze:furigana:Text}}` refused correct notes.
+It also required `cloze` to be the first filter, so `{{edit:cloze:Text}}`
+disabled the guard. It now follows Anki's rule: the field is the last segment,
+and `cloze` may be any filter in the chain.
+
 ## Known loose ends
 
 **Snippets come from the first field in model order.** For a Cloze note that is

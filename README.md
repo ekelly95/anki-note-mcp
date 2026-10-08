@@ -206,7 +206,8 @@ A malformed value fails loudly at startup rather than silently reverting to the
 default — one line on stderr naming the variable, the values it accepts and what
 it found, and a non-zero exit — and every numeric one is bounded at both ends:
 an extra digit is as much a typo as a missing one. `ANKI_CONNECT_URL` is parsed rather than
-prefix-checked, and one carrying a username or password is refused outright:
+prefix-checked. One with no host or an invalid port is refused, and one carrying
+a username or password is refused outright:
 everything sent to that URL includes your note content, and the URL itself is
 printed in the startup banner.
 
