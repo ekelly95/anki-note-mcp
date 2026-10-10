@@ -107,6 +107,13 @@ class FindNotesResult(BaseModel):
     )
     total_matched: int = Field(description="How many notes the query matched, before capping.")
     returned: int = Field(description="How many are in `notes` below.")
+    budget_exhausted: bool = Field(
+        default=False,
+        description=(
+            "True when `returned` stopped short of `limit` because the response's "
+            "total character budget ran out, not because nothing else matched."
+        ),
+    )
     notes: list[NoteSummary]
 
 
@@ -282,6 +289,8 @@ def register_find_notes(mcp: FastMCP, ctx: AppContext) -> None:
         note content — read one note with anki_get_note using an ID from here.
         `total_matched` reports the true match count even when `returned` is
         capped, so narrow the query if the two differ and you need them all.
+        `returned` can fall below `limit` too: the response has a total size
+        budget, and `budget_exhausted` is true when that is what stopped it.
 
         Note that a deck or tag name that does not exist is not an error: the
         query simply matches nothing. If you get zero results unexpectedly,
@@ -309,6 +318,7 @@ def register_find_notes(mcp: FastMCP, ctx: AppContext) -> None:
 
         summaries: list[NoteSummary] = []
         spent = 0
+        exhausted = False
         for info in infos:
             if not _is_real_note(info):
                 continue
@@ -321,6 +331,9 @@ def register_find_notes(mcp: FastMCP, ctx: AppContext) -> None:
             # half a megabyte of context nobody asked for. `total_matched`
             # still reports the truth, so a caller can see it got fewer.
             if spent + len(preview) > budget:
+                # Said rather than left to be inferred: `returned` below
+                # `limit` otherwise reads as "nothing else matched".
+                exhausted = True
                 break
             spent += len(preview)
 
@@ -333,7 +346,10 @@ def register_find_notes(mcp: FastMCP, ctx: AppContext) -> None:
             )
 
         return FindNotesResult(
-            total_matched=len(note_ids), returned=len(summaries), notes=summaries
+            total_matched=len(note_ids),
+            returned=len(summaries),
+            budget_exhausted=exhausted,
+            notes=summaries,
         )
 
 
@@ -432,7 +448,7 @@ def register_get_note(mcp: FastMCP, ctx: AppContext) -> None:
             found=True,
             note_id=info["noteId"],
             model=info["modelName"],
-            tags=list(info.get("tags", [])),
+            tags=list(info["tags"]),
             fields=fields_out,
             text=text_out,
             truncated=withheld,
@@ -566,6 +582,18 @@ def register_add_note(mcp: FastMCP, ctx: AppContext) -> None:
             if not _is_duplicate(str(exc)):
                 raise
             return AddNoteResult(created=False, reason=str(exc))
+
+        # After the write, so this is the one malformed reply where the note may
+        # well exist. Left to Pydantic, a non-integer failed validation with a
+        # message that said nothing about that, and the obvious response to an
+        # error is to send the card again.
+        if isinstance(note_id, bool) or not isinstance(note_id, int):
+            raise AnkiProtocolError(
+                f"AnkiConnect answered `addNote` with a {type(note_id).__name__} rather "
+                f"than the new note's ID, so whether the note was written is unknown. It "
+                f"may already be in the collection: search for it with anki_find_notes, "
+                f"and add it again only if it is not there."
+            )
         return AddNoteResult(created=True, note_id=note_id)
 
 
@@ -784,7 +812,7 @@ def register_tag_notes(mcp: FastMCP, ctx: AppContext) -> None:
                 continue
             # Lower-cased because Anki treats tags case-insensitively: adding
             # `NCSF` to a note tagged `ncsf` keeps the existing spelling.
-            have = {str(tag).lower() for tag in info.get("tags", [])}
+            have = {str(tag).lower() for tag in info["tags"]}
             done = not (wanted & have) if remove else wanted <= have
             if done:
                 changed += 1
@@ -1027,22 +1055,63 @@ def _refuse_if_delete_not_allowed(ctx: AppContext) -> None:
         )
 
 
-def _note_infos(result: Any) -> list[Any]:
-    """Type a `notesInfo` reply before three tools index or iterate it.
+_AFTER_WRITE = (
+    "The write itself was already sent; check the notes with anki_find_notes before "
+    "doing anything else."
+)
+
+
+def _note_infos(result: Any, consequence: str = "Nothing was read.") -> list[Any]:
+    """Type a `notesInfo` reply before the tools index or iterate it.
 
     Same rule as the `findNotes` guard, and the same reason: the client types
     the envelope, this types the one action result. Worth a helper rather than
-    three copies because `notesInfo` is the only action read by more than one
-    tool. A string reply is what makes this more than tidiness — indexed it
-    yields a character, iterated it yields characters, and `_is_real_note`
-    rejects every one of them, so the failure arrives as an honest-looking
-    "not found" or an empty result set rather than as an error.
+    copies because `notesInfo` is the only action read by more than one tool.
+    A string reply is what makes this more than tidiness — indexed it yields a
+    character, iterated it yields characters, and `_is_real_note` rejects every
+    one of them, so the failure arrives as an honest-looking "not found" or an
+    empty result set rather than as an error.
+
+    Each entry that claims to be a note is checked for the three keys the tools
+    read as well. Defaulting a missing one was worse than an error: an entry
+    with no `tags` read as "no tags", so removing a tag reported the note as
+    changed when its state was unknown, and a missing `fields` surfaced as the
+    bare text `'fields'`. `_is_real_note` itself stays a check of existence
+    only — made stricter, a malformed survivor of a delete would read as gone.
+
+    `consequence` is the sentence that ends the message, because after a bulk
+    write "nothing was read" would be true and dangerously incomplete.
     """
     if not isinstance(result, list):
         raise AnkiProtocolError(
             f"AnkiConnect answered `notesInfo` with a {type(result).__name__} "
-            f"rather than a list of notes. Nothing was read."
+            f"rather than a list of notes. {consequence}"
         )
+    for entry in result:
+        if not _is_real_note(entry):
+            continue
+        fields = entry.get("fields")
+        broken = [
+            key
+            for key, ok in (
+                (
+                    "fields",
+                    isinstance(fields, dict)
+                    and all(isinstance(value, dict) for value in fields.values()),
+                ),
+                ("modelName", isinstance(entry.get("modelName"), str)),
+                ("tags", isinstance(entry.get("tags"), list)),
+            )
+            if not ok
+        ]
+        if broken:
+            # Names the keys, never their values: the rule `_summarize` keeps
+            # in the client, kept here too.
+            raise AnkiProtocolError(
+                f"AnkiConnect answered `notesInfo` with a note whose "
+                f"{', '.join(f'`{key}`' for key in broken)} is missing or not the "
+                f"documented shape, so it cannot be read reliably. {consequence}"
+            )
     return result
 
 
@@ -1055,12 +1124,11 @@ def _infos_for(ids: list[int], result: Any) -> list[Any]:
     from the report rather than being called out — the unattributable result
     the re-read exists to rule out.
     """
-    infos = _note_infos(result)
+    infos = _note_infos(result, _AFTER_WRITE)
     if len(infos) != len(ids):
         raise AnkiProtocolError(
             f"AnkiConnect answered `notesInfo` for {len(ids)} notes with {len(infos)} "
-            f"entries, so the outcome for each note cannot be confirmed. The write itself "
-            f"was already sent; check the notes with anki_find_notes before doing anything else."
+            f"entries, so the outcome for each note cannot be confirmed. {_AFTER_WRITE}"
         )
     return infos
 

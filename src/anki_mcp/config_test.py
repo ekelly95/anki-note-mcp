@@ -147,6 +147,18 @@ def test_a_value_at_its_ceiling_is_still_accepted() -> None:
     assert config.timeout_s == MAX_TIMEOUT_S
 
 
+def test_a_response_budget_too_small_for_one_snippet_is_refused() -> None:
+    """Both values are in range alone, and together every search would return
+    nothing while reporting matches — a configuration that reads as a broken
+    server rather than as the typo it is."""
+    with pytest.raises(ValueError, match="ANKI_MAX_RESPONSE_CHARS") as caught:
+        load_config({"ANKI_SNIPPET_CHARS": "500", "ANKI_MAX_RESPONSE_CHARS": "400"})
+    assert "ANKI_SNIPPET_CHARS" in str(caught.value), "it must name both halves of the clash"
+
+    # The boundary: exactly one widest snippet fits.
+    load_config({"ANKI_SNIPPET_CHARS": "88", "ANKI_MAX_RESPONSE_CHARS": "100"})
+
+
 def test_a_rejection_names_the_ceiling_it_broke() -> None:
     """ "must be between 1 and 500" tells the reader what to write instead;
     "invalid value" sends them to the source."""

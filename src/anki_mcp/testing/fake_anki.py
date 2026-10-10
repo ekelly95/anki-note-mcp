@@ -41,6 +41,10 @@ class FakeAnki:
         # verbatim, bypassing envelope construction entirely.
         self.status_code: int = 200
         self.raw_body: str | None = None
+        # Sent on every reply, after the fake's own. For a reply that is not
+        # malformed JSON but malformed HTTP — a `Content-Encoding` the body
+        # does not honour.
+        self.extra_headers: dict[str, str] = {}
         self.hang_seconds: float = 0.0
 
         # Accept the request, record it, then close the socket without
@@ -98,10 +102,15 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(self.fake.status_code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
+            for name, value in self.fake.extra_headers.items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(payload)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             # Expected in the hang case: the client timed out and went away.
+            # Windows reports that as ConnectionAbortedError (WinError 10053)
+            # rather than either of the other two, which printed a traceback
+            # from this thread into the suite output now and then.
             pass
 
     def _reply(self, request: Any) -> Any:

@@ -270,6 +270,90 @@ def test_a_notes_info_reply_that_is_not_a_list_is_a_typed_error(
     assert "notesInfo" in text_of(result)
 
 
+def _without(key: str, value: Any = None) -> dict[str, Any]:
+    """A note entry with one key removed, or replaced by `value` if given."""
+    entry = note(1, {"Front": "SECRET-CONTENT"}, tags=["x"])
+    if value is None:
+        del entry[key]
+    else:
+        entry[key] = value
+    return entry
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        _without("tags"),
+        _without("fields"),
+        _without("modelName"),
+        _without("tags", "x y"),
+        _without("fields", {"Front": "not a dict"}),
+        _without("modelName", 7),
+    ],
+    ids=["no tags", "no fields", "no model", "tags a string", "field not a dict", "model a number"],
+)
+@pytest.mark.parametrize(
+    ("tool", "args", "after_write"),
+    [
+        ("anki_get_note", {"note_id": 1}, False),
+        ("anki_tag_notes", {"note_ids": [1], "tags": ["x"], "remove": True}, True),
+        ("anki_delete_notes", {"query": "tag:x", "expected_count": 1}, True),
+    ],
+    ids=["read", "tag", "delete"],
+)
+def test_a_note_entry_missing_part_of_its_shape_is_a_typed_error(
+    entry: dict[str, Any], tool: str, args: dict[str, Any], after_write: bool
+) -> None:
+    """Defaulting a missing key was worse than an error. An entry with no
+    `tags` read as "no tags", so removing a tag reported the note `changed`
+    when its state was unknown; a missing `fields` surfaced as the bare text
+    `'fields'`. After a bulk write the message also has to say the write went
+    out, or "nothing was read" invites the caller to send it again."""
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [1])
+        fake.on("notesInfo", [entry])
+        fake.on("removeTags", None)
+        fake.on("deleteNotes", None)
+
+    result = call_against(setup, tool, args, allow_delete=True)
+    assert result.isError is True
+    message = text_of(result)
+    assert "notesInfo" in message
+    assert "SECRET-CONTENT" not in message, "a protocol error quoted note content"
+    if after_write:
+        assert "already sent" in message
+
+
+def test_a_missing_note_is_still_found_false_and_not_a_shape_error() -> None:
+    """`{}` is the add-on's real answer for a missing note, not a malformed one."""
+    result = call_against(lambda f: f.on("notesInfo", [{}]), "anki_get_note", {"note_id": 9})
+    assert result.isError is False
+    assert result.structuredContent is not None
+    assert result.structuredContent["found"] is False
+
+
+@pytest.mark.parametrize("reply", [None, "1234", 12.5, True])
+def test_an_add_whose_reply_is_not_an_id_says_the_note_may_exist(reply: Any) -> None:
+    """The one malformed reply that arrives after a write. Left to Pydantic it
+    was a validation error saying nothing about the note possibly existing,
+    and the obvious response to an error is to send the card again."""
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("canAddNotesWithErrorDetail", [{"canAdd": True}])
+        fake.on("addNote", reply)
+
+    result = call_against(
+        setup,
+        "anki_add_note",
+        {"deck": "Default", "model": "Basic", "fields": {"Front": "hola"}},
+    )
+    assert result.isError is True
+    message = text_of(result)
+    assert "addNote" in message
+    assert "anki_find_notes" in message, "it must say how to find out before adding again"
+
+
 def test_a_missing_preflight_verdict_stops_the_write() -> None:
     """Not having a preflight is a different outcome from passing one.
 
@@ -1746,6 +1830,34 @@ def test_search_stops_adding_hits_once_the_budget_is_spent() -> None:
     assert payload["total_matched"] == 50, "the true match count must survive capping"
     assert payload["returned"] == len(payload["notes"])
     assert payload["returned"] < 50, "the budget stopped nothing, so it was never tested"
+    assert payload["budget_exhausted"] is True, "fewer hits than `limit`, and nothing said why"
+
+
+def test_a_search_stopped_by_its_limit_does_not_blame_the_budget() -> None:
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", list(range(1, 11)))
+        fake.on("notesInfo", [note(i, {"Front": "hola"}) for i in range(1, 4)])
+
+    result = call_against(setup, "anki_find_notes", {"query": "deck:Small", "limit": 3})
+    assert result.structuredContent is not None
+    assert result.structuredContent["returned"] == 3
+    assert result.structuredContent["budget_exhausted"] is False
+
+
+def test_a_budget_smaller_than_one_snippet_says_so_rather_than_finding_nothing() -> None:
+    """The extreme case of the one above: zero hits for a query that matched,
+    which without the flag reads exactly like a search that found nothing."""
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", [1, 2])
+        fake.on("notesInfo", [note(i, {"Front": "y" * 200}) for i in (1, 2)])
+
+    result = call_against(setup, "anki_find_notes", {"query": "deck:Big"}, max_response_chars=50)
+    assert result.structuredContent is not None
+    payload = result.structuredContent
+    assert payload["returned"] == 0
+    assert payload["total_matched"] == 2
+    assert payload["budget_exhausted"] is True
 
 
 def test_a_hit_whose_note_vanished_between_the_two_calls_is_skipped() -> None:
