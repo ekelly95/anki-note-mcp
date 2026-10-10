@@ -36,8 +36,10 @@ mode the one-call-per-card design exists to prevent, arriving through a door tha
 design did not cover — the outcome was attributable, and wrong.
 
 **What now happens.** `_refuse_broken_cloze` runs between the preflight and the
-write. It reads the note type's card templates, takes the field named by
-`{{cloze:...}}`, and refuses the note if that field carries no valid deletion —
+write, and since 2026-10-10 on `anki_update_note` too, against the note as it
+would be after the update, whenever the update touches a cloze field. It reads
+the note type, takes every field its front templates name with
+`{{cloze:...}}`, and refuses the note if none of them carries a valid deletion —
 returning the same sentence AnkiConnect's own refusal produces under collection
 scope, so what a caller reads never depends on a duplicate-checking option that
 has nothing to do with the problem. Three shapes are caught: no deletion,
@@ -47,11 +49,16 @@ not read.
 **This is the one place this server overrules the add-on**, so its edges are
 deliberate:
 
-- **Read from `modelTemplates`, not `findModelsByName`.** Both were measured and
-  both are correct — a cloze note type answers `type: 1` — but the templates say
-  *which* field as well as whether, and a custom cloze type need not read its
-  first one. Naming the wrong field is the failure this whole area exists to
-  remove.
+- **Read from `findModelsByName`, for the kind and the templates together.**
+  This first used `modelTemplates`, which names the fields but not the kind. The
+  2026-10-10 audit pointed out what that missed. A standard note type whose front
+  happens to use a cloze filter gets ordinary cards, so it must not be refused.
+  A cloze type may read several fields, and Anki builds a card from a deletion
+  in any of them, so stopping at the first match refused correct notes and told
+  their authors the second field "does not count". `findModelsByName` answers
+  both in one call: `type` 1 is cloze-kind, and `tmpls[].qfmt` holds the fronts.
+  A custom cloze type still need not read its first field, which is why the
+  names come from the template rather than being assumed.
 - **Cached per note type for the life of the process**, on `AppContext`. A
   twenty-card run costs one lookup, not twenty, which is what makes the guard
   affordable in a loop where keep-alive is deliberately off. This is not the
@@ -360,13 +367,15 @@ running when they were written, so only the first of the three restates a
 measurement already taken on 2026-08-13; the other two are predictions until
 `uv run pytest -m live` has been run once with Anki open.
 
-**Two tools now swallow `AnkiError` rather than letting it out,** and the
-contract is written inline at each rather than extracted. `anki_status` is one,
-because a closed Anki is a successful answer to the question it asks.
-`_explain_empty_note` is the other, because it only decorates a refusal that has
-already been decided, and raising there would convert a structured
-`created: false` into an exception a loop suddenly has to catch. A third would be
-the point at which this becomes a helper instead of a comment.
+**Swallowing `AnkiError` is now one helper, `_lookup_or_none`, plus
+`anki_status`.** This paragraph once said a third swallower would be the point to
+extract one. The cloze guard's note type lookup became that third, and the
+2026-10-10 audit pointed out the threshold had been crossed. `_field_names_or_none`
+(for the explainers) and `_cloze_fields` (for the guard) both go through it. Each
+is a courtesy on top of a decision the add-on makes anyway, so a failed lookup
+falls back rather than raising. `anki_status` keeps its contract inline because
+its job is different: a closed Anki is a successful answer to the question it
+asks.
 
 **`_LIMITS` bounds `max_keepalive_connections` but not `max_connections`,** so
 concurrency is capped only by anyio's 40-thread default. Forty sockets would just
@@ -442,7 +451,7 @@ the validators question, of which two specific instances were in scope and are
 now guarded; and it raised three things that should stay as they are. Recorded
 in the same spirit as the section above.
 
-**Reading the Back of a card template to find the cloze field.** `_cloze_field`
+**Reading the Back of a card template to find the cloze field.** `_cloze_fields`
 searches only the `Front` of each template, and the audit called that a defect
 on the grounds that a note type with static text on the front and the cloze on
 the back is legal Anki. It is not — or rather, it is legal to build and it

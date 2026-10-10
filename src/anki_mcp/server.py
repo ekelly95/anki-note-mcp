@@ -148,7 +148,11 @@ class AddNoteResult(BaseModel):
     note_id: int | None = Field(default=None, description="Set when created is true.")
     reason: str | None = Field(
         default=None,
-        description="Why the note was not added, when created is false. Usually a duplicate.",
+        description=(
+            "Why the note was not added, when created is false. Usually a duplicate; "
+            "otherwise a deck, note type or field name that does not exist, or a cloze "
+            "note with no valid {{c1::...}} deletion, which this server refuses itself."
+        ),
     )
 
 
@@ -464,6 +468,11 @@ def register_add_note(mcp: FastMCP, ctx: AppContext) -> None:
         this returns created=false with a `reason` rather than failing, so a
         loop can skip and continue. Set allow_duplicate to add anyway. Deck
         scope includes subdecks.
+
+        A note of a cloze note type must carry a valid {{c1::...}} deletion in
+        a field its cards are built from, or it is refused with created=false
+        and a reason naming that field. Anki would write it and show an error
+        card instead, so this is the one refusal that is this server's own.
         """
         _refuse_if_read_only(ctx)
 
@@ -590,6 +599,10 @@ def register_update_note(mcp: FastMCP, ctx: AppContext) -> None:
         truncation marker — because the part you did not see would be lost.
         Do not have the note open in Anki's Browse window while updating, or
         the change may not stick.
+
+        On a cloze note, an update to a cloze field that would leave no valid
+        {{c1::...}} deletion is refused, as anki_add_note refuses one, because
+        every card of the note would then show an error.
         """
         _refuse_if_read_only(ctx)
 
@@ -666,6 +679,23 @@ def register_update_note(mcp: FastMCP, ctx: AppContext) -> None:
                     f"not, so a name that worked when adding changes nothing here. Nothing "
                     f"was written; re-send with the exact names."
                 )
+
+            # The add path's cloze guard, applied to the note as it would be
+            # AFTER this update. Without it, rewriting a Cloze note's text to a
+            # value with no deletion — or a broken one — was written and
+            # reported `updated: true`, and Anki kept the existing cards, which
+            # then render "No cloze 1 found on card": the exact defect
+            # anki_add_note refuses. Only when the update touches a cloze field,
+            # so a note that is already broken can still have its other fields
+            # edited. The lookup is the cached one the add path uses.
+            model = info["modelName"]
+            cloze = {name.lower() for name in await _cloze_fields(ctx, model)}
+            if any(name.lower() in cloze for name in fields):
+                after = {name: value.get("value", "") for name, value in info["fields"].items()}
+                after.update(fields)
+                refusal = await _refuse_broken_cloze(ctx, model, after)
+                if refusal is not None:
+                    raise ValueError(refusal)
 
         note: dict[str, Any] = {"id": note_id}
         # Truthiness again, matching the guard above: an empty dict reaching
@@ -1039,21 +1069,35 @@ def _is_empty_note(message: str) -> bool:
     return "is empty" in message.lower()
 
 
+async def _lookup_or_none(ctx: AppContext, action: str, **params: Any) -> Any:
+    """Ask AnkiConnect something whose failure must not change the outcome.
+
+    The one place in this file that swallows an `AnkiError` rather than letting
+    it out — `anki_status` aside, whose contract is its own and is written
+    inline. Extracted when a third caller arrived, as `docs/roadmap.md` said it
+    would be. Every caller is a courtesy layered on a decision the add-on has
+    already made or would make: the explainers decorate a refusal already
+    decided, where raising would turn a structured `created=false` into an
+    exception a loop suddenly has to catch; and the cloze guard fails open,
+    where raising would refuse a note the add-on was willing to accept.
+
+    None for a failure, which callers already treat like any reply that is not
+    the shape they expected.
+    """
+    try:
+        return await ctx.anki.invoke_async(action, **params)
+    except AnkiError:
+        return None
+
+
 async def _field_names_or_none(ctx: AppContext, model: str) -> list[str] | None:
     """A note type's field names, or None if the answer cannot be trusted.
 
-    Shared by the two explainers below, which are the only callers, and the only
-    place in this file that swallows an `AnkiError` rather than letting it out.
-    Both are decoration on a refusal already decided: raising here would convert
-    a structured `created=false` into an exception a loop suddenly has to catch,
-    which is the outcome the preflight exists to prevent. A less helpful message
-    costs far less than that, so every failure returns None and the caller falls
-    back to the add-on's own wording.
+    Shared by the two explainers below, which are the only callers. Every
+    failure returns None and the caller falls back to the add-on's own wording;
+    see `_lookup_or_none` for why a less helpful message beats raising here.
     """
-    try:
-        real = await ctx.anki.invoke_async("modelFieldNames", modelName=model)
-    except AnkiError:
-        return None
+    real = await _lookup_or_none(ctx, "modelFieldNames", modelName=model)
     if not isinstance(real, list):
         return None
     names = [name for name in real if isinstance(name, str)]
@@ -1161,40 +1205,61 @@ def _is_cloze_mismatch(message: str) -> bool:
     return "for unknown reason" in message.lower()
 
 
-async def _cloze_field(ctx: AppContext, model: str) -> str | None:
-    """Which field a note type's cloze template reads, or None if it has none.
+async def _cloze_fields(ctx: AppContext, model: str) -> tuple[str, ...]:
+    """Every field a cloze note type's front templates read; empty if none.
 
-    Read from `modelTemplates` rather than `findModelsByName`, which also
-    answers this via a `type` of 1. Measured 2026-08-14, both are available and
-    both are correct — the templates are chosen because they say WHICH field as
-    well as whether, and a custom cloze note type need not read its first one.
-    A message that names the wrong field is the failure being designed out here.
+    Two facts decide this, and `findModelsByName` answers both in one round
+    trip: whether the note type is cloze-kind at all (`type` 1), and which
+    fields its fronts read through a cloze filter (`tmpls[].qfmt`). Both
+    matter. A standard note type whose front happens to use `{{cloze:Text}}`
+    gets ordinary cards from Anki, so keying off the template alone would
+    refuse a note that works. And a cloze type may read more than one field —
+    the Anki manual, *Card Generation*: Anki "looks on the front template for
+    one or more cloze replacements" — so stopping at the first match told the
+    reader a deletion in the second field "does not count" when it does.
 
-    One lookup per note type per process, cached on the context. None is the
+    Read from the front only, as Anki does; see the roadmap's declined findings
+    for why the back takes no part. Image Occlusion needs nothing special: its
+    front is `{{cloze:Occlusion}}` and its deletions match `has_cloze_deletion`.
+
+    One lookup per note type per process, cached on the context. Empty is the
     fail-open answer for a lookup that failed as well as for a note type that
-    genuinely does no cloze, because both mean "do not refuse on this basis".
+    genuinely does no cloze, because both mean "do not refuse on this basis" —
+    but only the second is cached: a lookup that failed because Anki was
+    mid-dialog should be asked again on the next card, not remembered.
     """
     if model in ctx.cloze_fields:
         return ctx.cloze_fields[model]
-    try:
-        templates = await ctx.anki.invoke_async("modelTemplates", modelName=model)
-    except AnkiError:
-        # Not cached: a lookup that failed because Anki was mid-dialog should be
-        # retried on the next card, not remembered as "this type does no cloze".
-        return None
-    if not isinstance(templates, dict):
-        return None
+    models = await _lookup_or_none(ctx, "findModelsByName", modelNames=[model])
+    found = models[0] if isinstance(models, list) and len(models) == 1 else None
+    if not isinstance(found, dict):
+        return ()
 
-    found: str | None = None
-    for side in templates.values():
-        if not isinstance(side, dict):
-            continue
-        match = _CLOZE_TEMPLATE_RE.search(str(side.get("Front", "")))
-        if match:
-            found = match.group(1).strip()
-            break
-    ctx.cloze_fields[model] = found
-    return found
+    # `bool` excluded on purpose: True == 1, and a reply that says `true` here
+    # is not telling us the note type is cloze-kind.
+    kind = found.get("type")
+    names: tuple[str, ...] = ()
+    if isinstance(kind, int) and not isinstance(kind, bool) and kind == 1:
+        templates = found.get("tmpls")
+        fronts = [
+            str(template.get("qfmt", ""))
+            for template in (templates if isinstance(templates, list) else [])
+            if isinstance(template, dict)
+        ]
+        names = tuple(
+            dict.fromkeys(
+                match.group(1).strip()
+                for front in fronts
+                for match in _CLOZE_TEMPLATE_RE.finditer(front)
+            )
+        )
+    ctx.cloze_fields[model] = names
+    return names
+
+
+def _either(names: tuple[str, ...]) -> str:
+    """`'Text'`, or `'Text' or 'Extra'` — for naming where a deletion may go."""
+    return " or ".join(repr(name) for name in names)
 
 
 async def _refuse_broken_cloze(ctx: AppContext, model: str, fields: dict[str, str]) -> str | None:
@@ -1216,11 +1281,13 @@ async def _refuse_broken_cloze(ctx: AppContext, model: str, fields: dict[str, st
     error, which is ugly rather than broken, and refusing it would be this
     server overruling Anki about a card that works.
     """
-    field_name = await _cloze_field(ctx, model)
-    if field_name is None:
+    names = await _cloze_fields(ctx, model)
+    if not names:
         return None
     supplied = {name.lower(): value for name, value in fields.items()}
-    if has_cloze_deletion(supplied.get(field_name.lower(), "")):
+    # Any of them: Anki makes a card for every deletion number it finds across
+    # all the fields the front reads, so one is enough.
+    if any(has_cloze_deletion(supplied.get(name.lower(), "")) for name in names):
         return None
     return await _explain_cloze_mismatch(ctx, model, fields)
 
@@ -1237,8 +1304,8 @@ async def _explain_cloze_mismatch(ctx: AppContext, model: str, fields: dict[str,
     exactly like having none at all, so asking "is there one anywhere" would
     merge two cases that need opposite corrections.
     """
-    field_name = await _cloze_field(ctx, model)
-    if field_name is None:
+    names = await _cloze_fields(ctx, model)
+    if not names:
         # No cloze template, so the markers are the thing that does not belong.
         if any(has_cloze_deletion(value) for value in fields.values()):
             return (
@@ -1250,20 +1317,28 @@ async def _explain_cloze_mismatch(ctx: AppContext, model: str, fields: dict[str,
         return _CLOZE_GENERIC
 
     supplied = {name.lower(): value for name, value in fields.items()}
-    text = supplied.get(field_name.lower(), "")
-    if has_cloze_attempt(text):
+    attempted = next(
+        (name for name in names if has_cloze_attempt(supplied.get(name.lower(), ""))), None
+    )
+    if attempted is not None:
         return (
             f"Note type {model!r} builds its cards from cloze deletions, and the syntax in "
-            f"{field_name!r} is close but not valid — Anki reads it as ordinary text, so the "
+            f"{attempted!r} is close but not valid — Anki reads it as ordinary text, so the "
             f"card would show an error instead of your content. It must be exactly "
             f"{{{{c1::the hidden words}}}}: two braces each side, a lower-case c, a number, "
             f"then TWO colons. Nothing was written."
         )
+    if len(names) == 1:
+        missing = f"{names[0]!r} has none"
+        where = f"in {names[0]!r} specifically"
+    else:
+        missing = f"none of {', '.join(repr(name) for name in names)} has one"
+        where = f"in {_either(names)}"
     return (
-        f"Note type {model!r} builds its cards from cloze deletions and {field_name!r} has "
-        f"none, so the card would show an error instead of your content. Wrap the words to "
-        f"hide as {{{{c1::like this}}}}, in {field_name!r} specifically — a deletion in any "
-        f"other field does not count. Nothing was written."
+        f"Note type {model!r} builds its cards from cloze deletions and {missing}, so the "
+        f"card would show an error instead of your content. Wrap the words to hide as "
+        f"{{{{c1::like this}}}}, {where} — a deletion in any other field does not count. "
+        f"Nothing was written."
     )
 
 
