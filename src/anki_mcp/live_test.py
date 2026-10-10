@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import time
 from collections.abc import Iterator
 from dataclasses import replace
+from typing import Any
 
 import pytest
+from mcp.shared.memory import create_connected_server_and_client_session
 
 from .client import AnkiClient
 from .config import load_config
@@ -654,9 +657,75 @@ def test_a_note_created_now_gets_a_sane_timestamp_id(anki: AnkiClient) -> None:
     wrong writes notes with ids in the future and scheduling follows them there.
     This has happened here once, by about fifteen hours, and nothing else in the
     suite would have noticed."""
-    import time
-
     note_id = add(anki, SCRATCH_DECK, "reloj")
     now_ms = time.time() * 1000
     drift_hours = (note_id - now_ms) / 3_600_000
     assert abs(drift_hours) < 1, f"note id is {drift_hours:.1f}h from now; check the system clock"
+
+
+def call_tool(tool: str, args: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """One tool call through a real MCP session against the real add-on.
+
+    The bulk tools' guarantees are about what they do with the add-on's
+    replies, so they are only worth pinning through the tool itself.
+    """
+    cfg = replace(load_config(), **overrides)
+    ctx = AppContext(config=cfg, anki=AnkiClient(cfg))
+
+    async def body() -> dict[str, Any]:
+        async with create_connected_server_and_client_session(
+            build_server(ctx)._mcp_server
+        ) as client:
+            result = await client.call_tool(tool, args)
+        assert result.isError is False, result.content
+        assert result.structuredContent is not None
+        return result.structuredContent
+
+    try:
+        return asyncio.run(body())
+    finally:
+        ctx.anki.close()
+
+
+def test_tagging_reports_each_note_against_the_real_add_on(anki: AnkiClient) -> None:
+    """`anki_tag_notes` rests on three add-on facts that were read, not run:
+    `addTags` and `removeTags` return null and skip a missing ID silently, and
+    `notesInfo` answers in request order with `{}` for a missing note. If any
+    of them changes, the per-note report this tool exists for goes wrong."""
+    first = add(anki, SCRATCH_DECK, "el lápiz")
+    second = add(anki, SCRATCH_DECK, "la goma")
+    missing = 1  # a millisecond after the epoch; no real note has this ID
+
+    added = call_tool(
+        "anki_tag_notes", {"note_ids": [first, missing, second], "tags": ["anki-mcp-live"]}
+    )
+    assert added["changed"] == 2
+    assert added["not_found"] == [missing], "the missing note was not placed by position"
+    assert added["unchanged"] == []
+
+    removed = call_tool(
+        "anki_tag_notes",
+        {"note_ids": [first, second], "tags": ["anki-mcp-live"], "remove": True},
+    )
+    assert removed["changed"] == 2
+    infos = anki.invoke("notesInfo", notes=[first, second])
+    assert all("anki-mcp-live" not in info["tags"] for info in infos)
+
+
+def test_deleting_by_an_agreed_count_against_the_real_add_on(anki: AnkiClient) -> None:
+    """`deleteNotes` returns null whatever happened, so the count reported is
+    the one read back afterwards. Scratch notes only, under a tag no other
+    note can carry."""
+    tag = f"anki-mcp-delete-{time.time_ns()}"
+    ids = [add(anki, SCRATCH_DECK, f"borrar {i} {tag}") for i in range(2)]
+    anki.invoke("addTags", notes=ids, tags=tag)
+
+    outcome = call_tool(
+        "anki_delete_notes",
+        {"query": f"tag:{tag}", "expected_count": 2},
+        allow_delete=True,
+        read_only=False,
+    )
+    assert outcome["deleted"] == 2
+    assert outcome["still_present"] == []
+    assert anki.invoke("findNotes", query=f"tag:{tag}") == []

@@ -49,6 +49,13 @@ def test_an_empty_api_key_is_treated_as_unset() -> None:
     assert load_config({"ANKI_CONNECT_API_KEY": "k"}).api_key == "k"
 
 
+def test_a_key_of_only_whitespace_is_unset_and_a_padded_one_is_trimmed() -> None:
+    """A pasting accident, sent as given, fails exactly like a wrong key — and
+    the message then sends the reader to a setting that looks right."""
+    assert load_config({"ANKI_CONNECT_API_KEY": "   "}).api_key is None
+    assert load_config({"ANKI_CONNECT_API_KEY": " k \n"}).api_key == "k"
+
+
 def test_read_only_is_off_unless_it_is_turned_on() -> None:
     assert load_config({}).read_only is False
     assert load_config({"ANKI_READ_ONLY": ""}).read_only is False

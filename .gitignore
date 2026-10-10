@@ -19,6 +19,11 @@ __pycache__/
 .coverage.*
 htmlcov/
 
+# Claude Code's per-machine permission settings. Ignored here rather than left
+# to a global ignore rule a contributor may not have, because it records which
+# commands one person's machine allows.
+.claude/settings.local.json
+
 # Generated whole-repo snapshots. Untracked but unignored, `git add -A` would
 # have committed a quarter-megabyte copy of every source file — and the next
 # one, taken after some secret exists, would commit that too.
