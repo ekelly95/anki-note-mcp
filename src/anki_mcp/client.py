@@ -123,6 +123,15 @@ _TRANSPORT = (
 # how one dropped reply becomes two notes.
 _AMBIGUOUS = frozenset({"addNote"})
 
+# A reply arrived and could not even be read as HTTP content: a bad
+# `Content-Encoding`, or a redirect loop. AnkiConnect produces neither, so the
+# useful thing to say is that something else may be answering. The request was
+# delivered, so it takes the same action-aware tail as the messages above.
+_UNREADABLE = (
+    "Something answered at {url}, but its reply could not be read ({detail}), so "
+    "it may not be AnkiConnect. Check what is listening on that URL. {tail}"
+)
+
 _RETRY = "Then retry."
 
 _UNKNOWN_OUTCOME = (
@@ -355,6 +364,18 @@ class AnkiClient:
             # RemoteProtocolError, ReadError and friends — e.g. Anki quit mid-request.
             raise AnkiNotRunningError(
                 _TRANSPORT.format(
+                    url=self._cfg.url,
+                    detail=type(exc).__name__,
+                    tail=_tail(action),
+                )
+            ) from exc
+        except httpx.RequestError as exc:
+            # The rest of the family: DecodingError and TooManyRedirects are
+            # RequestErrors but not TransportErrors, so they escaped the
+            # contract above as raw httpx exceptions. The request did go out,
+            # so the tail matters here exactly as it does above.
+            raise AnkiProtocolError(
+                _UNREADABLE.format(
                     url=self._cfg.url,
                     detail=type(exc).__name__,
                     tail=_tail(action),

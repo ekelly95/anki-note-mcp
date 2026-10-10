@@ -419,7 +419,8 @@ was telling the model to retry a call whose outcome is unknowable.
 result a tool indexes, iterates or casts — `version`, `findNotes`,
 `canAddNotesWithErrorDetail`, `notesInfo` and `modelNames`; the last two were
 added on 2026-08-14 after a second audit found them missing against this same
-rule. The rest would defend against an endpoint that is not AnkiConnect at all,
+rule. A third audit, on 2026-10-10, added `addNote`'s returned ID, which is cast
+into the result model, and the shape of each `notesInfo` entry. The rest would defend against an endpoint that is not AnkiConnect at all,
 which this server cannot usefully survive.
 
 **Turning on an AnkiConnect `apiKey`.** It would live in plaintext in the MCP

@@ -26,6 +26,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from .fields import TRUNCATION_SUFFIX
+
 DEFAULT_URL = "http://127.0.0.1:8765"
 
 # Ceilings, not only floors. Failing loudly is supposed to work in both
@@ -127,7 +129,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     """
     e: Mapping[str, str] = os.environ if env is None else env
 
-    return Config(
+    config = Config(
         url=_checked_url(e.get("ANKI_CONNECT_URL", DEFAULT_URL)),
         api_key=e.get("ANKI_CONNECT_API_KEY") or None,
         timeout_s=_bounded_float(e, "ANKI_CONNECT_TIMEOUT", 10.0, MAX_TIMEOUT_S),
@@ -139,6 +141,19 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         allow_sync=_flag(e, "ANKI_ALLOW_SYNC"),
         allow_delete=_flag(e, "ANKI_ALLOW_DELETE"),
     )
+
+    # Each bound is checked alone above; this is the one pair that can disagree.
+    # A snippet that does not fit in the response budget makes every search
+    # return nothing with a non-zero `total_matched` — a configuration that
+    # looks like a broken server rather than a typo.
+    widest = config.snippet_chars + len(TRUNCATION_SUFFIX)
+    if widest > config.max_response_chars:
+        raise ValueError(
+            f"ANKI_MAX_RESPONSE_CHARS ({config.max_response_chars}) must leave room for "
+            f"one search snippet, which ANKI_SNIPPET_CHARS ({config.snippet_chars}) allows "
+            f"to be {widest} characters. Raise the first or lower the second."
+        )
+    return config
 
 
 def _checked_url(url: str) -> str:

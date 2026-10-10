@@ -281,6 +281,26 @@ def test_an_http_error_status_raises_a_typed_error_not_httpx(status: int) -> Non
             assert not isinstance(caught.value, httpx.HTTPError)
 
 
+@pytest.mark.parametrize("action", ["version", "addNote"])
+def test_a_reply_that_cannot_be_decoded_is_a_typed_error_not_httpx(action: str) -> None:
+    """`DecodingError` is an httpx `RequestError` but not a `TransportError`, so
+    a reply claiming gzip and carrying plain JSON escaped the backstop raw —
+    the one contract this module exists to keep. AnkiConnect never sends one;
+    whatever else answers the URL might."""
+    with fake_anki() as fake:
+        fake.on(action, 6)
+        fake.extra_headers = {"Content-Encoding": "gzip"}
+        client = AnkiClient(config_for(fake.url))
+        with client, pytest.raises(AnkiProtocolError) as caught:
+            client.invoke(action)
+    message = str(caught.value)
+    assert "DecodingError" in message
+    assert "may not be AnkiConnect" in message
+    if action == "addNote":
+        # Delivered, so the outcome is as unknown as after a lost reply.
+        assert "anki_find_notes" in message
+
+
 def test_a_rejected_api_key_arrives_as_an_envelope_not_a_403() -> None:
     """The path that actually fires, and previously did not reach AnkiAuthError.
 
