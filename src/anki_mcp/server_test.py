@@ -715,13 +715,13 @@ def test_adding_a_note_preflights_then_writes() -> None:
     assert result.structuredContent["created"] is True
     assert result.structuredContent["note_id"] == 1234567890
     # Three calls, and the middle one only on the first card of a note type:
-    # `modelTemplates` is what tells the cloze guard whether this type builds
+    # `findModelsByName` is what tells the cloze guard whether this type builds
     # cards from deletions, and it is cached on the context for the rest of the
     # run. `test_the_note_type_is_looked_up_once_per_run_not_once_per_card`
     # holds the half of that which actually costs something.
     assert actions_called(captured["fake"]) == [
         "canAddNotesWithErrorDetail",
-        "modelTemplates",
+        "findModelsByName",
         "addNote",
     ]
 
@@ -955,17 +955,37 @@ def test_the_field_list_is_not_fetched_when_nothing_is_wrong() -> None:
 # reading "No cloze 1 found on card". Both were measured on 2026-08-14.
 
 CLOZE_VERDICT = [{"canAdd": False, "error": "cannot create note for unknown reason"}]
-CLOZE_TEMPLATES = {"Cloze": {"Front": "{{cloze:Text}}", "Back": "{{cloze:Text}}<br>{{Back Extra}}"}}
-BASIC_TEMPLATES = {"Card 1": {"Front": "{{Front}}", "Back": "{{FrontSide}}<hr>{{Back}}"}}
+
+
+def model_reply(*fronts: str, kind: int = 1) -> list[dict[str, Any]]:
+    """A `findModelsByName` reply for one note type, cut to what the guard reads.
+
+    The real one carries the whole model — fields, CSS, LaTeX preamble — and
+    the guard reads two things from it: `type` (1 is cloze-kind) and each
+    template's front, `qfmt`.
+    """
+    return [
+        {
+            "type": kind,
+            "tmpls": [
+                {"name": f"Card {i + 1}", "qfmt": front, "afmt": ""}
+                for i, front in enumerate(fronts)
+            ],
+        }
+    ]
+
+
+CLOZE_MODEL = model_reply("{{cloze:Text}}")
+BASIC_MODEL = model_reply("{{Front}}", kind=0)
 
 
 def add_cloze_note(
     fields: dict[str, str],
     *,
-    templates: Any = CLOZE_TEMPLATES,
+    model_info: Any = CLOZE_MODEL,
     model: str = "Cloze",
     verdict: Any = None,
-    fail_templates: bool = False,
+    fail_lookup: bool = False,
 ) -> tuple[CallToolResult, list[str]]:
     """One add against a fake scripted with a note type's real templates.
 
@@ -976,10 +996,10 @@ def add_cloze_note(
 
     def setup(fake: FakeAnki) -> None:
         fake.on("canAddNotesWithErrorDetail", verdict or [{"canAdd": True}])
-        if fail_templates:
-            fake.fails("modelTemplates", "model was not found: " + model)
+        if fail_lookup:
+            fake.fails("findModelsByName", "model was not found: " + model)
         else:
-            fake.on("modelTemplates", templates)
+            fake.on("findModelsByName", model_info)
         fake.on("addNote", 4242)
         captured["fake"] = fake
 
@@ -1028,7 +1048,7 @@ def test_the_cloze_field_comes_from_the_template_not_the_first_field() -> None:
     is read from `{{cloze:...}}` rather than assumed."""
     result, actions = add_cloze_note(
         {"Prompt": "el perro", "Sentence": "no deletion here"},
-        templates={"Card": {"Front": "{{cloze:Sentence}}", "Back": "{{cloze:Sentence}}"}},
+        model_info=model_reply("{{cloze:Sentence}}"),
         model="Custom Cloze",
     )
     reason = reason_of(result)
@@ -1044,7 +1064,7 @@ def test_a_filter_after_cloze_does_not_become_part_of_the_field_name() -> None:
     the add-on, so a false refusal here is the expensive direction."""
     result, actions = add_cloze_note(
         {"Text": "el {{c1::perro}}", "Back Extra": ""},
-        templates={"Cloze": {"Front": "{{cloze:furigana:Text}}", "Back": ""}},
+        model_info=model_reply("{{cloze:furigana:Text}}"),
     )
     assert result.isError is False
     assert "addNote" in actions, "a valid cloze note was refused"
@@ -1056,7 +1076,7 @@ def test_a_filter_before_cloze_still_switches_the_guard_on() -> None:
     guard off for those note types without saying so."""
     result, actions = add_cloze_note(
         {"Text": "no deletion here", "Back Extra": ""},
-        templates={"Cloze": {"Front": "{{edit:cloze:Text}}", "Back": ""}},
+        model_info=model_reply("{{edit:cloze:Text}}"),
     )
     assert "addNote" not in actions, "a note that would render an error card was written"
     assert "'Text'" in reason_of(result)
@@ -1077,7 +1097,7 @@ def test_a_non_cloze_note_type_is_never_refused_by_the_guard() -> None:
     overruling Anki about a card that works."""
     result, actions = add_cloze_note(
         {"Front": "el {{c1::pato}}", "Back": "the duck"},
-        templates=BASIC_TEMPLATES,
+        model_info=BASIC_MODEL,
         model="Basic",
     )
     assert result.structuredContent is not None
@@ -1089,7 +1109,7 @@ def test_a_note_type_lookup_that_fails_does_not_block_the_write() -> None:
     """Fail open. This guard is a courtesy on top of what AnkiConnect does; a
     lookup that could not run must never turn into a refusal of a note the
     add-on was willing to accept."""
-    result, actions = add_cloze_note({"Text": "el perro"}, fail_templates=True)
+    result, actions = add_cloze_note({"Text": "el perro"}, fail_lookup=True)
     assert result.structuredContent is not None
     assert result.structuredContent["created"] is True
     assert "addNote" in actions
@@ -1097,17 +1117,77 @@ def test_a_note_type_lookup_that_fails_does_not_block_the_write() -> None:
 
 def test_a_malformed_template_reply_does_not_block_the_write() -> None:
     """Same rule for a reply that is not the shape the add-on documents."""
-    for templates in ("not a dict", {"Card": "not a dict either"}, {}):
-        result, actions = add_cloze_note({"Text": "el perro"}, templates=templates)
+    malformed: list[Any] = [
+        "not a list",
+        [],
+        ["not a dict"],
+        CLOZE_MODEL * 2,
+        [{"type": 1, "tmpls": "not a list"}],
+        [{"type": 1, "tmpls": ["not a dict either"]}],
+        [{"type": True, "tmpls": [{"qfmt": "{{cloze:Text}}"}]}],
+        [{"tmpls": [{"qfmt": "{{cloze:Text}}"}]}],
+    ]
+    for model_info in malformed:
+        result, actions = add_cloze_note({"Text": "el perro"}, model_info=model_info)
         assert result.structuredContent is not None
-        assert result.structuredContent["created"] is True, templates
+        assert result.structuredContent["created"] is True, model_info
         assert "addNote" in actions
+
+
+def test_a_deletion_in_any_cloze_field_the_front_reads_is_enough() -> None:
+    """Anki looks on the front for "one or more cloze replacements" and makes a
+    card for every deletion it finds in any of them. Stopping at the first
+    `{{cloze:...}}` refused this note, and told its author — confidently — that
+    a deletion in the second field does not count."""
+    two_fields = model_reply("{{cloze:Text}}<br>{{cloze:Extra}}")
+    result, actions = add_cloze_note(
+        {"Text": "no deletion here", "Extra": "el {{c1::perro}}"}, model_info=two_fields
+    )
+    assert result.structuredContent is not None
+    assert result.structuredContent["created"] is True, "a deletion in a cloze field was refused"
+    assert "addNote" in actions
+
+
+def test_a_two_field_cloze_note_with_no_deletion_names_both_fields() -> None:
+    """The refusal has to say every place a deletion may go, not just the
+    first, or the reader is sent to one field when either would do."""
+    result, actions = add_cloze_note(
+        {"Text": "no deletion", "Extra": "none here either"},
+        model_info=model_reply("{{cloze:Text}}", "{{cloze:Extra}}"),
+    )
+    reason = reason_of(result)
+    assert "addNote" not in actions
+    assert "'Text' or 'Extra'" in reason
+    assert "specifically" not in reason
+
+
+def test_a_broken_deletion_in_the_second_cloze_field_is_named_as_syntax() -> None:
+    result, _ = add_cloze_note(
+        {"Text": "no deletion", "Extra": "el {{c1:perro}}"},
+        model_info=model_reply("{{cloze:Text}}{{cloze:Extra}}"),
+    )
+    reason = reason_of(result)
+    assert "TWO colons" in reason
+    assert "'Extra'" in reason
+
+
+def test_a_standard_note_type_using_a_cloze_filter_is_not_refused() -> None:
+    """The guard keys off the note type's kind as well as its template. A
+    standard type whose front uses `{{cloze:Text}}` gets ordinary cards from
+    Anki, so refusing it for lacking a deletion would overrule Anki about a
+    card that works."""
+    result, actions = add_cloze_note(
+        {"Text": "no deletion here"}, model_info=model_reply("{{cloze:Text}}", kind=0)
+    )
+    assert result.structuredContent is not None
+    assert result.structuredContent["created"] is True
+    assert "addNote" in actions
 
 
 def test_the_note_type_is_looked_up_once_per_run_not_once_per_card() -> None:
     """What makes the guard affordable, and the reason it is cached at all.
 
-    Twenty cards through one server must cost one `modelTemplates` call, not
+    Twenty cards through one server must cost one `findModelsByName` call, not
     twenty — keep-alive is deliberately off, so each one would be a fresh TCP
     handshake in the loop this server is built for.
     """
@@ -1116,7 +1196,7 @@ def test_the_note_type_is_looked_up_once_per_run_not_once_per_card() -> None:
     async def body() -> None:
         with fake_anki() as fake:
             fake.on("canAddNotesWithErrorDetail", [{"canAdd": True}])
-            fake.on("modelTemplates", CLOZE_TEMPLATES)
+            fake.on("findModelsByName", CLOZE_MODEL)
             fake.on("addNote", 1)
             captured["fake"] = fake
             cfg = config_for(fake.url)
@@ -1136,7 +1216,7 @@ def test_the_note_type_is_looked_up_once_per_run_not_once_per_card() -> None:
             ctx.anki.close()
 
     asyncio.run(body())
-    lookups = actions_called(captured["fake"]).count("modelTemplates")
+    lookups = actions_called(captured["fake"]).count("findModelsByName")
     assert lookups == 1, f"twenty cards cost {lookups} note type lookups"
 
 
@@ -1147,7 +1227,7 @@ def test_a_duplicate_never_pays_for_a_note_type_lookup() -> None:
         {"Text": "el {{c1::perro}}"},
         verdict=[{"canAdd": False, "error": "cannot create note because it is a duplicate"}],
     )
-    assert "modelTemplates" not in actions
+    assert "findModelsByName" not in actions
 
 
 def test_the_add_on_refusing_a_cloze_mismatch_gives_the_same_message() -> None:
@@ -1168,7 +1248,7 @@ def test_a_valid_deletion_on_a_non_cloze_type_explains_the_other_direction() -> 
     reason = reason_of(
         add_cloze_note(
             {"Front": "el {{c1::pato}}", "Back": "the duck"},
-            templates=BASIC_TEMPLATES,
+            model_info=BASIC_MODEL,
             model="Basic",
             verdict=CLOZE_VERDICT,
         )[0]
@@ -1188,7 +1268,7 @@ def test_a_refusal_on_a_non_cloze_type_with_no_deletion_names_cloze_without_gues
     reason = reason_of(
         add_cloze_note(
             {"Front": "el pato", "Back": "the duck"},
-            templates=BASIC_TEMPLATES,
+            model_info=BASIC_MODEL,
             model="Basic",
             verdict=CLOZE_VERDICT,
         )[0]
@@ -1200,7 +1280,7 @@ def test_a_refusal_on_a_non_cloze_type_with_no_deletion_names_cloze_without_gues
 def test_a_refusal_with_no_readable_templates_still_beats_unknown_reason() -> None:
     """The last fallback. Without the templates the direction cannot be
     established, but naming cloze at all is worth more than 'unknown reason'."""
-    result, _ = add_cloze_note({"Text": "el perro"}, verdict=CLOZE_VERDICT, fail_templates=True)
+    result, _ = add_cloze_note({"Text": "el perro"}, verdict=CLOZE_VERDICT, fail_lookup=True)
     reason = reason_of(result)
     assert "cloze" in reason.lower()
     assert "{{c1::" in reason
@@ -1336,8 +1416,10 @@ def test_update_uses_the_action_that_can_actually_change_tags() -> None:
         {"note_id": 42, "fields": {"Back": "hello"}, "tags": ["spanish", "verb"]},
     )
     assert result.isError is False
-    assert actions_called(captured["fake"]) == ["notesInfo", "updateNote"]
-    sent = captured["fake"].requests[1]["params"]["note"]
+    # The middle call is the cloze guard's note type lookup, which the fake
+    # leaves unanswered; a guard that cannot look fails open.
+    assert actions_called(captured["fake"]) == ["notesInfo", "findModelsByName", "updateNote"]
+    sent = captured["fake"].requests[-1]["params"]["note"]
     assert sent == {"id": 42, "fields": {"Back": "hello"}, "tags": ["spanish", "verb"]}
     assert result.structuredContent == {
         "updated": True,
@@ -1357,7 +1439,7 @@ def test_omitting_tags_leaves_them_out_of_the_payload_entirely() -> None:
         captured["fake"] = fake
 
     call_against(setup, "anki_update_note", {"note_id": 42, "fields": {"Back": "hello"}})
-    sent = captured["fake"].requests[1]["params"]["note"]
+    sent = captured["fake"].requests[-1]["params"]["note"]
     assert "tags" not in sent
 
 
@@ -1396,6 +1478,73 @@ def test_a_typo_that_matches_nothing_is_refused_without_a_bogus_suggestion() -> 
     result = call_against(setup, "anki_update_note", {"note_id": 42, "fields": {"Nope": "hello"}})
     assert result.isError is True
     assert "did you mean" not in text_of(result)
+
+
+def update_cloze_note(
+    fields: dict[str, str],
+    *,
+    stored: dict[str, str] | None = None,
+    model_info: Any = CLOZE_MODEL,
+) -> tuple[CallToolResult, list[str]]:
+    """One update of a stored cloze note, against a fake that knows its type."""
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        current = stored or {"Text": "el {{c1::perro}}", "Back Extra": ""}
+        fake.on("notesInfo", [note(42, current, model="Cloze")])
+        fake.on("findModelsByName", model_info)
+        fake.on("updateNote", None)
+        captured["fake"] = fake
+
+    result = call_against(setup, "anki_update_note", {"note_id": 42, "fields": fields})
+    return result, actions_called(captured["fake"])
+
+
+def test_an_update_that_strips_the_deletion_from_a_cloze_note_is_refused() -> None:
+    """The add path's defect, reached by the other door. Anki keeps the note's
+    existing cards, and every one of them renders "No cloze 1 found on card"
+    once the text it was cut from has no deletion left in it."""
+    result, actions = update_cloze_note({"Text": "el perro"})
+    assert result.isError is True
+    message = text_of(result)
+    assert "updateNote" not in actions, "a cloze note was left with no deletion"
+    assert "'Text'" in message
+    assert "Nothing was written" in message
+
+
+def test_an_update_that_breaks_the_deletion_syntax_is_called_a_syntax_problem() -> None:
+    result, actions = update_cloze_note({"Text": "el {{c1:perro}}"})
+    assert "updateNote" not in actions
+    assert "TWO colons" in text_of(result)
+
+
+def test_a_valid_rewrite_of_a_cloze_field_goes_through() -> None:
+    result, actions = update_cloze_note({"Text": "el {{c1::gato}} is the cat"})
+    assert result.isError is False
+    assert "updateNote" in actions
+
+
+def test_an_update_that_leaves_the_cloze_field_alone_is_not_checked() -> None:
+    """A note that is already broken must still be editable in its other
+    fields. Refusing here would block every edit to it except the one fix,
+    and the fix is not what the caller asked for."""
+    result, actions = update_cloze_note(
+        {"Back Extra": "a hint"}, stored={"Text": "no deletion", "Back Extra": ""}
+    )
+    assert result.isError is False
+    assert "updateNote" in actions
+
+
+def test_an_update_is_judged_on_the_note_as_it_would_be_afterwards() -> None:
+    """Fields the update does not name keep their stored values, and a deletion
+    surviving in one of them still makes cards."""
+    result, actions = update_cloze_note(
+        {"Text": "plain now"},
+        stored={"Text": "el {{c1::perro}}", "Extra": "y {{c2::gato}}"},
+        model_info=model_reply("{{cloze:Text}}{{cloze:Extra}}"),
+    )
+    assert result.isError is False
+    assert "updateNote" in actions
 
 
 def test_updating_a_note_that_does_not_exist_says_so() -> None:

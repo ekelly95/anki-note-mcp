@@ -399,6 +399,50 @@ def test_a_valid_cloze_note_is_accepted(anki: AnkiClient) -> None:
     assert verdict["canAdd"] is True, f"a valid cloze note was refused: {verdict.get('error')!r}"
 
 
+def test_find_models_by_name_reports_the_kind_the_guard_keys_off(anki: AnkiClient) -> None:
+    """`_cloze_fields` switches the guard on only for a `type` of 1, and reads
+    the fronts from `tmpls[].qfmt`. Both are add-on facts, not ours."""
+    skip_without_cloze(anki)
+
+    cloze, basic = anki.invoke("findModelsByName", modelNames=["Cloze", "Basic"])
+    assert cloze["type"] == 1, "a cloze note type no longer reports type 1"
+    assert basic["type"] == 0, "a standard note type no longer reports type 0"
+    assert "{{cloze:Text}}" in cloze["tmpls"][0]["qfmt"]
+
+
+# A note type the live tier never creates, because AnkiConnect has no action
+# that deletes one and this tier promises to leave nothing behind. To run the
+# test below, make it once in Anki: Tools > Manage Note Types > Add > "Add:
+# Cloze", name it this, add a field called `Extra`, and set the card's front
+# template to `{{cloze:Text}}<br>{{cloze:Extra}}`.
+SCRATCH_CLOZE2 = "anki-mcp-scratch-cloze2"
+
+
+def test_a_deletion_in_a_second_cloze_field_is_enough_for_anki_and_the_guard(
+    anki: AnkiClient,
+) -> None:
+    """Settles what `_cloze_fields` collecting EVERY cloze field rests on: Anki
+    builds cards from a deletion in any field the front reads through a cloze
+    filter, not only the first."""
+    if SCRATCH_CLOZE2 not in anki.invoke("modelNames"):
+        pytest.skip(f"no note type called {SCRATCH_CLOZE2!r}; see the comment above")
+    ctx = AppContext(config=load_config(), anki=anki)
+    second_only = {"Text": "no deletion here", "Extra": "el {{c1::perro}}"}
+
+    verdict = verdict_for(anki, SCRATCH_CLOZE2, second_only)
+    assert verdict["canAdd"] is True, (
+        f"Anki refused a deletion in the second cloze field: {verdict.get('error')!r}, so "
+        f"accepting one in any cloze field is now too lenient"
+    )
+    assert asyncio.run(_refuse_broken_cloze(ctx, SCRATCH_CLOZE2, second_only)) is None
+
+    neither = {"Text": "no deletion", "Extra": "none either"}
+    assert verdict_for(anki, SCRATCH_CLOZE2, neither)["canAdd"] is False
+    refusal = asyncio.run(_refuse_broken_cloze(ctx, SCRATCH_CLOZE2, neither))
+    assert refusal is not None
+    assert "'Text' or 'Extra'" in refusal
+
+
 def test_has_cloze_deletion_agrees_with_anki_on_every_marker_variant(anki: AnkiClient) -> None:
     """`_explain_cloze_mismatch` branches on this predicate, so a disagreement
     with the add-on is a confidently wrong message rather than a missing one.

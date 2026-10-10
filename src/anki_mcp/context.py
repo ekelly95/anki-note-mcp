@@ -19,7 +19,7 @@ class AppContext:
     config: Config
     anki: AnkiClient
 
-    # Note type name -> the field its cloze template reads, or None for a note
+    # Note type name -> the fields its cloze templates read, or () for a note
     # type that does not do cloze. `anki_add_note` needs this on every add to
     # catch a deletion-less cloze note before writing it, and asking per card
     # would be a round trip per card in the loop this server is built for —
@@ -35,7 +35,7 @@ class AppContext:
     #
     # Mutable inside a frozen dataclass on purpose: the binding never changes,
     # only the contents, so `frozen=True` still says what it is there to say.
-    cloze_fields: dict[str, str | None] = field(default_factory=dict)
+    cloze_fields: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 def create_context(config: Config | None = None) -> AppContext:
