@@ -50,6 +50,15 @@ API_VERSION = 6
 # full read timeout before the caller is told so.
 CONNECT_TIMEOUT_S = 2.0
 
+# `sync` is the one action whose reply waits on the network beyond this
+# machine. Read from the installed add-on: its `sync` handler calls
+# `mw.col.sync_collection(...)` and returns only once that has finished, so a
+# large collection or a slow link takes as long as the sync does — and the
+# ten-second default read budget turned an ordinary sync into a timeout that
+# blamed a dialog. Not a setting: the server stays responsive while it waits,
+# because tools are async, so the only cost of a longer budget is the wait.
+SYNC_TIMEOUT_S = 120.0
+
 # How much of a batched call's parameters may appear in an error message.
 _LABEL_CHARS = 60
 
@@ -88,19 +97,30 @@ _BLOCKED = (
     "Check the Anki window and dismiss any open dialog. {tail}"
 )
 
+# The read-timeout message for `sync`, which stalls for a different reason
+# than every other action: it is not answered until it is done.
+_BLOCKED_SYNC = (
+    "AnkiConnect accepted the sync request at {url} but did not answer within "
+    "{timeout:g}s. It answers a sync only once the sync has finished, so it may "
+    "still be running — or a prompt in Anki, such as an AnkiWeb login or a choice "
+    "between uploading and downloading the whole collection, is holding it. Check "
+    "the Anki window, and let that sync finish there before asking for another."
+)
+
 _TRANSPORT = (
     "The connection to AnkiConnect at {url} failed mid-request ({detail}). "
     "Anki may have been closed or restarted. Check the Anki window. {tail}"
 )
 
-# Both messages above lose their connection AFTER it was established, so the
+# The messages above lose their connection AFTER it was established, so the
 # request may or may not have been carried out — which matters for exactly one
-# action. A read changes nothing, `updateNote` writes the same values a second
-# time, and a second `sync` is the same request; `addNote` is the one that is
-# not idempotent. The comment on _LIMITS above is already explicit that a lost
-# response cannot be told apart from an undelivered request, and then these
-# messages went on to say "retry" regardless. That is how one dropped reply
-# becomes two notes.
+# action. A read changes nothing, and `updateNote` writes the same values a
+# second time; `addNote` is the one that is not idempotent. (`sync` is safe to
+# repeat too, but it gets its own tail: a second one while the first is still
+# running only queues behind it.) The comment on _LIMITS above is already
+# explicit that a lost response cannot be told apart from an undelivered
+# request, and then these messages went on to say "retry" regardless. That is
+# how one dropped reply becomes two notes.
 _AMBIGUOUS = frozenset({"addNote"})
 
 _RETRY = "Then retry."
@@ -174,9 +194,19 @@ def _refuse_to_block_the_event_loop() -> None:
     )
 
 
+_SYNC_UNKNOWN = (
+    "Then check the Anki window before syncing again: the sync may have finished "
+    "before the connection was lost."
+)
+
+
 def _tail(action: str) -> str:
     """What to tell the caller to do next, given what this action would repeat."""
-    return _UNKNOWN_OUTCOME if action in _AMBIGUOUS else _RETRY
+    if action in _AMBIGUOUS:
+        return _UNKNOWN_OUTCOME
+    if action == "sync":
+        return _SYNC_UNKNOWN
+    return _RETRY
 
 
 def _error_for(message: str) -> AnkiError:
@@ -254,8 +284,17 @@ def _summarize(value: Any) -> str:
 class AnkiClient:
     """A thin typed client. One contract: only `AnkiError` leaves it."""
 
-    def __init__(self, config: Config, http: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        http: httpx.Client | None = None,
+        *,
+        sync_timeout_s: float = SYNC_TIMEOUT_S,
+    ) -> None:
         self._cfg = config
+        # Injectable for the same reason `http` is: a test can reach the sync
+        # timeout path in a fraction of a second rather than two minutes.
+        self._sync_timeout_s = sync_timeout_s
         # Injectable so tests can point at the fake without monkeypatching.
         self._http = (
             http
@@ -286,18 +325,29 @@ class AnkiClient:
         """
         _refuse_to_block_the_event_loop()
         payload = self._request(action, params)
+        budget = self.read_budget(action)
 
         try:
-            response = self._http.post(self._cfg.url, json=payload)
+            response = self._http.post(
+                self._cfg.url,
+                json=payload,
+                # Only `sync` overrides the client's own timeout, so an
+                # injected client keeps its configuration for everything else.
+                timeout=_timeouts(budget) if action == "sync" else httpx.USE_CLIENT_DEFAULT,
+            )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # Nothing is listening, or the connection could not be established.
             raise AnkiNotRunningError(_NOT_RUNNING.format(url=self._cfg.url)) from exc
         except httpx.TimeoutException as exc:
             # Connected, but no response: ReadTimeout / WriteTimeout / PoolTimeout.
+            if action == "sync":
+                raise AnkiNotRunningError(
+                    _BLOCKED_SYNC.format(url=self._cfg.url, timeout=budget)
+                ) from exc
             raise AnkiNotRunningError(
                 _BLOCKED.format(
                     url=self._cfg.url,
-                    timeout=self._cfg.timeout_s,
+                    timeout=budget,
                     tail=_tail(action),
                 )
             ) from exc
@@ -312,6 +362,13 @@ class AnkiClient:
             ) from exc
 
         return self._unwrap(action, response)
+
+    def read_budget(self, action: str) -> float:
+        """Seconds this action may wait for its reply. Never shorter than the
+        configured timeout: a setting above the sync floor still applies."""
+        if action == "sync":
+            return max(self._cfg.timeout_s, self._sync_timeout_s)
+        return self._cfg.timeout_s
 
     async def invoke_async(self, action: str, **params: Any) -> Any:
         """`invoke`, off the event loop. This is what the tools call.

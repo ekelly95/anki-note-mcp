@@ -1881,14 +1881,31 @@ def test_read_only_mode_leaves_every_reading_tool_working(tool: str, args: dict[
     assert result.isError is False
 
 
-def test_sync_says_plainly_that_it_did_not_confirm_anything() -> None:
-    """The caller is a model that will otherwise report 'synced' to the user."""
+def test_sync_says_what_its_success_means_and_what_it_did_not_wait_for() -> None:
+    """Read from the add-on: a null reply is a finished collection sync, not a
+    queued request — the old note called it unconfirmed, which was wrong. What
+    the call genuinely does not wait for is Anki's follow-up sync, media
+    included, and the note has to say that rather than claim everything."""
     result = call_against(lambda f: f.on("sync", None), "anki_sync", allow_sync=True)
     assert result.isError is False
     assert result.structuredContent is not None
     assert result.structuredContent["requested"] is True
     note_text = result.structuredContent["note"].lower()
-    assert "not confirmed" in note_text
+    assert "in step" in note_text
+    assert "media" in note_text
+    assert "not confirmed" not in note_text
+
+
+def test_a_sync_that_needs_a_full_sync_is_an_error_not_a_success() -> None:
+    """The add-on raises unless the outcome was "no changes" or a normal sync,
+    so a conflict reaches the caller as a failure with the add-on's words."""
+    result = call_against(
+        lambda f: f.fails("sync", "Sync status 2 not one of [0, 1]"),
+        "anki_sync",
+        allow_sync=True,
+    )
+    assert result.isError is True
+    assert "Sync status" in text_of(result)
 
 
 # --- sync is granted separately from write access --------------------------
@@ -2179,9 +2196,11 @@ def test_a_blank_query_is_refused_because_anki_reads_it_as_everything(blank: str
     assert actions_called(captured["fake"]) == []
 
 
-def test_a_count_that_differs_from_the_agreed_one_deletes_nothing() -> None:
+@pytest.mark.parametrize("expected", [2, 5])
+def test_a_count_that_differs_from_the_agreed_one_deletes_nothing(expected: int) -> None:
     """The guard that makes deleting by query safe: a typo, a note added
-    since, a query that drifted. Each arrives as a different number."""
+    since, a query that drifted. Each arrives as a different number — and in
+    either direction, so a guard weakened from `!=` to `>` fails here too."""
     captured: dict[str, FakeAnki] = {}
 
     def setup(fake: FakeAnki) -> None:
@@ -2190,13 +2209,62 @@ def test_a_count_that_differs_from_the_agreed_one_deletes_nothing() -> None:
         captured["fake"] = fake
 
     result = call_against(
-        setup, "anki_delete_notes", {"query": "tag:x", "expected_count": 2}, allow_delete=True
+        setup,
+        "anki_delete_notes",
+        {"query": "tag:x", "expected_count": expected},
+        allow_delete=True,
     )
     assert result.isError is True
     message = text_of(result)
-    assert "matches 3 notes, not the 2 expected" in message
+    assert f"matches 3 notes, not the {expected} expected" in message
     assert "Nothing was deleted" in message
     assert actions_called(captured["fake"]) == ["findNotes"]
+
+
+def test_a_count_above_what_a_search_can_show_is_refused_before_searching() -> None:
+    """The precondition is that the user saw what matches, and one search shows
+    at most ANKI_MAX_SEARCH notes. Without the cap, `deck:X` with a matching
+    count deleted the whole deck — the README's "nothing here empties a deck"
+    was false the moment deleting was switched on."""
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", list(range(1, 7)))
+        fake.on("deleteNotes", None)
+        captured["fake"] = fake
+
+    result = call_against(
+        setup,
+        "anki_delete_notes",
+        {"query": "deck:Spanish", "expected_count": 6},
+        allow_delete=True,
+        max_search_results=5,
+    )
+    assert result.isError is True
+    message = text_of(result)
+    assert "at most 5" in message
+    assert "Browse" in message, "and point at where a larger deletion belongs"
+    assert actions_called(captured["fake"]) == [], "it searched before refusing"
+
+
+def test_a_count_exactly_at_the_cap_still_deletes() -> None:
+    captured: dict[str, FakeAnki] = {}
+
+    def setup(fake: FakeAnki) -> None:
+        fake.on("findNotes", list(range(1, 6)))
+        fake.on("deleteNotes", None)
+        fake.on("notesInfo", [{}] * 5)
+        captured["fake"] = fake
+
+    result = call_against(
+        setup,
+        "anki_delete_notes",
+        {"query": "tag:x", "expected_count": 5},
+        allow_delete=True,
+        max_search_results=5,
+    )
+    assert result.isError is False, text_of(result)
+    assert "deleteNotes" in actions_called(captured["fake"])
 
 
 def test_a_query_matching_nothing_sends_no_delete() -> None:

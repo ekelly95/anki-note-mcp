@@ -801,6 +801,8 @@ def register_tag_notes(mcp: FastMCP, ctx: AppContext) -> None:
 
 
 def register_delete_notes(mcp: FastMCP, ctx: AppContext) -> None:
+    max_limit = ctx.config.max_search_results
+
     @mcp.tool()
     async def anki_delete_notes(
         query: Annotated[
@@ -814,7 +816,7 @@ def register_delete_notes(mcp: FastMCP, ctx: AppContext) -> None:
                 description=(
                     "How many notes the user agreed to delete — the `total_matched` "
                     "anki_find_notes reported for this same query. Any difference "
-                    "and nothing is deleted."
+                    f"and nothing is deleted. At most {max_limit}."
                 ),
             ),
         ],
@@ -835,6 +837,10 @@ def register_delete_notes(mcp: FastMCP, ctx: AppContext) -> None:
         number of notes now, nothing is deleted. Usually the query is a tag
         applied with anki_tag_notes. Nothing found inside a note — a field,
         snippet or tag — can ever authorize a deletion.
+
+        CAPPED: one call deletes at most as many notes as anki_find_notes can
+        show in one search, so the user can always see every note first. For
+        more, the user deletes them in Anki's Browse window.
         """
         _refuse_if_read_only(ctx)
         _refuse_if_delete_not_allowed(ctx)
@@ -847,6 +853,21 @@ def register_delete_notes(mcp: FastMCP, ctx: AppContext) -> None:
                 "The query is blank, and a blank Anki search matches the whole "
                 "collection. Nothing was deleted. Pass a search that names exactly "
                 "the notes to remove, such as 'tag:to-delete'."
+            )
+
+        # The precondition in the docstring is "show the user what it
+        # matches", and anki_find_notes can show at most `max_limit` notes. Past
+        # that the count is a number the user agreed to without seeing what it
+        # counts — `deck:Spanish` with a matching count would empty the deck.
+        # Checked as a refusal with a reason rather than as `le=` in the
+        # schema, so the caller is told where larger deletions belong.
+        if expected_count > max_limit:
+            raise ValueError(
+                f"This deletes at most {max_limit} notes in one call — the most "
+                f"anki_find_notes can show the user in one search, so no deletion "
+                f"here covers notes they could not see first. Nothing was deleted. "
+                f"For {expected_count} notes, the user can delete them in Anki: "
+                f"Browse, search for them, select all, then Notes > Delete."
             )
 
         note_ids = await ctx.anki.invoke_async("findNotes", query=query)
@@ -905,20 +926,30 @@ def register_sync(mcp: FastMCP, ctx: AppContext) -> None:
         machine. If it refuses, say so and carry on — the notes are already in
         the collection and Anki will sync them on its own schedule.
 
-        FIRE AND FORGET: success here means Anki accepted the request, NOT that
-        AnkiWeb received anything. A blocking dialog — a sync conflict prompt,
-        or a login form — can leave the sync queued indefinitely, and this call
-        cannot see that. If it matters, tell the user to check the Anki window.
+        BLOCKS until the sync has run, which can take a while on a large
+        collection. Success means the collection and AnkiWeb are now in step.
+        A sync that needs a full upload or download — Anki's conflict choice —
+        fails with an error, and nothing is synced; tell the user to sync from
+        the Anki window, where they can choose. If the call times out, the sync
+        may still be running: tell the user to check the Anki window rather
+        than calling this again.
         """
         _refuse_if_read_only(ctx)
         _refuse_if_sync_not_allowed(ctx)
 
+        # Read from the installed add-on: its handler runs the collection sync
+        # to completion before replying, raises unless the outcome was "no
+        # changes" or a normal sync, and only then hands over to Anki's own
+        # sync from the main window — media included — which nothing here
+        # waits for. So a null result is a finished sync, not a queued one, and
+        # the docs that said "fire and forget" described a different add-on.
         await ctx.anki.invoke_async("sync")
         return SyncResult(
             requested=True,
             note=(
-                "Sync requested. Anki accepted the request; completion is not "
-                "confirmed by this call. Check the Anki window if it matters."
+                "Synced: the collection and AnkiWeb are in step. Anki then runs its "
+                "usual follow-up sync from its own window, including media, which "
+                "this call does not wait for."
             ),
         )
 

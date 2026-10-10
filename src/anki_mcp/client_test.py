@@ -14,7 +14,14 @@ import time
 import httpx
 import pytest
 
-from .client import _LIMITS, API_VERSION, CONNECT_TIMEOUT_S, AnkiClient, _summarize
+from .client import (
+    _LIMITS,
+    API_VERSION,
+    CONNECT_TIMEOUT_S,
+    SYNC_TIMEOUT_S,
+    AnkiClient,
+    _summarize,
+)
 from .config import Config
 from .errors import (
     AnkiAuthError,
@@ -376,6 +383,49 @@ def test_a_server_that_never_responds_blames_a_modal_dialog() -> None:
     assert "2055492159" not in message, "this is not the 'install the add-on' case"
 
 
+# --- sync is answered only once it has finished ----------------------------
+
+
+def test_sync_waits_longer_than_the_configured_timeout_and_nothing_else_does() -> None:
+    client = AnkiClient(config_for("http://127.0.0.1:8765", timeout_s=10.0))
+    try:
+        assert client.read_budget("sync") == SYNC_TIMEOUT_S
+        assert client.read_budget("notesInfo") == 10.0
+    finally:
+        client.close()
+
+    # A configured timeout above the floor still applies to sync as well.
+    client = AnkiClient(config_for("http://127.0.0.1:8765", timeout_s=200.0))
+    try:
+        assert client.read_budget("sync") == 200.0
+    finally:
+        client.close()
+
+
+def test_a_sync_slower_than_the_configured_timeout_still_succeeds() -> None:
+    """Read from the add-on: `sync` does not reply until `sync_collection` has
+    returned. Held to the shared read budget, a sync of ordinary length timed
+    out and was reported as a blocking dialog."""
+    with fake_anki() as fake:
+        fake.hang_seconds = 0.5
+        fake.on("sync", None)
+        client = AnkiClient(config_for(fake.url, timeout_s=0.2), sync_timeout_s=3.0)
+        with client:
+            assert client.invoke("sync") is None
+
+
+def test_a_sync_that_times_out_says_it_may_still_be_running() -> None:
+    with fake_anki() as fake:
+        fake.hang_seconds = 5.0
+        client = AnkiClient(config_for(fake.url, timeout_s=0.1), sync_timeout_s=0.3)
+        with client, pytest.raises(AnkiNotRunningError) as caught:
+            client.invoke("sync")
+    message = str(caught.value)
+    assert "still be running" in message, "the likeliest cause is the sync itself"
+    assert "within 0.3s" in message, "it must report the budget it actually used"
+    assert "2055492159" not in message, "this is not the 'install the add-on' case"
+
+
 # --- what a failure tells the caller to do next ----------------------------
 
 
@@ -433,6 +483,12 @@ def test_the_add_really_did_reach_anki_before_the_reply_went_missing() -> None:
     """
     _, received = _lost_connection("addNote", hang=False)
     assert received == ["addNote"], "the fake must have taken delivery for this to be the case"
+
+
+def test_a_lost_connection_on_a_sync_says_to_look_before_syncing_again() -> None:
+    message, _ = _lost_connection("sync", hang=False)
+    assert "before syncing again" in message
+    assert "then retry." not in message.lower()
 
 
 def test_an_unreachable_anki_still_says_retry_even_for_an_add() -> None:

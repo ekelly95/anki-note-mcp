@@ -24,9 +24,11 @@ stranger. So:
   permanently, so it refuses unless `ANKI_ALLOW_DELETE` is set. It also refuses
   a blank search, and refuses unless the search matches exactly the
   `expected_count` the caller passes, which its description tells the model to
-  confirm with the user first. An injected instruction would therefore need the
-  setting on and an agreed count to match before anything is lost. There is no
-  deck management and no rescheduling.
+  confirm with the user first, and refuses a count above `ANKI_MAX_SEARCH`, the
+  most one search can show the user. An injected instruction would therefore
+  need the setting on and an agreed count to match before anything is lost, and
+  even then could not reach more notes than the user was able to see. There is
+  no deck management and no rescheduling.
 - **Writing is gated, and syncing and deleting are gated separately.**
   `ANKI_READ_ONLY` refuses add, update, tag, delete and sync before any of them
   reaches AnkiConnect. `ANKI_ALLOW_SYNC` permits sync alone, because a sync is
@@ -54,7 +56,8 @@ stranger. So:
 Please report any way to reach the collection past these guards, to make the
 server write when `ANKI_READ_ONLY` is set, to make it sync when `ANKI_ALLOW_SYNC`
 is not, to make it delete when `ANKI_ALLOW_DELETE` is not or when the match
-count differs from `expected_count`, or to get note content out through an
+count differs from `expected_count` or exceeds `ANKI_MAX_SEARCH`, or to get
+note content out through an
 error path.
 
 ## Out of scope

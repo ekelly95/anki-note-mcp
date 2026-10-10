@@ -12,9 +12,10 @@ Cards, and retyping it.
 There is deliberately **no bulk add**. Twenty cards is twenty calls. Tags can
 be added or removed in bulk, because that write can be checked note by note and
 undone. Deleting notes is refused unless it is switched on separately, and even
-then only for an exact count the user agreed to. Nothing here empties a deck or
-changes a card's scheduling, and syncing to AnkiWeb is refused unless it is
-switched on separately too.
+then only for an exact count the user agreed to, and never more notes in one
+call than a single search can show them first. Nothing here changes a card's
+scheduling, and syncing to AnkiWeb is refused unless it is switched on
+separately too.
 
 **Status: beta.** All nine tools work end to end against a real collection. The
 offline test suite covers every statement and branch; a separate opt-in tier runs
@@ -166,8 +167,8 @@ saying which, rather than an error.
 | `anki_add_note` | Add ONE note. Checks for duplicates before writing, so a rejection is a result rather than an exception. |
 | `anki_update_note` | Change ONE note's fields and/or tags. Validates field names against the real note first. |
 | `anki_tag_notes` | Add or remove tags on up to `ANKI_MAX_SEARCH` notes at once. Re-reads every note to report which changed, which do not exist, and which did not take. Reversible. |
-| `anki_delete_notes` | PERMANENTLY delete the notes matching a search. Off unless separately enabled, and refuses unless the match count equals the `expected_count` the user agreed to. |
-| `anki_sync` | Ask Anki to sync with AnkiWeb. Off unless separately enabled, and says plainly that it confirms nothing. |
+| `anki_delete_notes` | PERMANENTLY delete the notes matching a search. Off unless separately enabled, refuses unless the match count equals the `expected_count` the user agreed to, and deletes at most `ANKI_MAX_SEARCH` notes per call. |
+| `anki_sync` | Sync the collection with AnkiWeb, waiting until it has finished. Off unless separately enabled. A sync that needs a full upload or download is refused by the add-on, not forced. |
 
 The intended order is four steps, and each one is deliberately cheap:
 
@@ -192,8 +193,8 @@ Entirely environment-driven, and every value has a default. Set these in the
 |---|---|---|---|
 | `ANKI_CONNECT_URL` | `http://127.0.0.1:8765` | — | Where AnkiConnect is listening. |
 | `ANKI_CONNECT_API_KEY` | unset | — | Only if you have set `apiKey` in the add-on's own configuration. |
-| `ANKI_CONNECT_TIMEOUT` | `10` seconds | 300 | How long to wait for a reply. Connecting has its own 2-second budget. |
-| `ANKI_MAX_SEARCH` | `50` | 500 | Most hits one search may return. Also published to clients as the `limit` parameter's maximum. |
+| `ANKI_CONNECT_TIMEOUT` | `10` seconds | 300 | How long to wait for a reply. Connecting has its own 2-second budget, and `anki_sync` waits at least 120 seconds, because AnkiConnect answers a sync only once it has finished. |
+| `ANKI_MAX_SEARCH` | `50` | 500 | Most hits one search may return. Also published to clients as the `limit` parameter's maximum, and the most notes one `anki_tag_notes` or `anki_delete_notes` call may touch. |
 | `ANKI_SNIPPET_CHARS` | `120` | 1,000 | Visible characters per search snippet. |
 | `ANKI_MAX_FIELD_CHARS` | `5,000` | 100,000 | Largest single field returned whole. Anything above is withheld and named. |
 | `ANKI_MAX_RESPONSE_CHARS` | `40,000` | 400,000 | Total note content one call may return. |
@@ -223,8 +224,10 @@ reported as truncated because every field was individually fine.
   tool here whose effect cannot be undone — Anki has no trash, and the only way
   back is restoring a whole-collection backup. It refuses unless
   `ANKI_ALLOW_DELETE` is set, refuses a blank search (which Anki reads as the
-  whole collection), and refuses unless the search matches exactly the
-  `expected_count` the user agreed to. The safer route needs no switch: tag
+  whole collection), refuses unless the search matches exactly the
+  `expected_count` the user agreed to, and refuses a count above
+  `ANKI_MAX_SEARCH` — the most a search can show the user before they agree to
+  it. The safer route needs no switch: tag
   the notes with `anki_tag_notes`, then delete them yourself in Anki's Browse
   window. There is still no deck tool and no scheduling tool.
 - **Three switches guard the collection, and unset is the safe value for all of
@@ -309,6 +312,10 @@ empty deck. Check the name against `anki_list_decks_and_models`.
 That is correct unless `ANKI_ALLOW_SYNC` is set in this server's environment.
 Authoring cards needs neither switch. If it is set and sync still fails with
 `sync: auth not configured`, no AnkiWeb account is configured in Anki itself.
+If it fails with `Sync status … not one of …`, AnkiWeb and the collection have
+diverged far enough to need a full upload or download; sync from the Anki window,
+where you can choose which. If it times out, the sync may still be running —
+check the Anki window before asking again.
 
 **A note came back with a field missing and listed under `truncated`.**
 It was larger than `ANKI_MAX_FIELD_CHARS` and has been withheld rather than cut.
