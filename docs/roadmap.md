@@ -362,12 +362,18 @@ arriving as a side effect. The containment is the same one that fixed the field
 names: `reason` says exactly which deck was not found, so a caller that reads it
 stops on the first card because it understood the message.
 
-**The empty-note measurements in `live_test.py` have not been run.** Three tests
-were added on 2026-08-14 to pin what the add-on actually says for a wrong field
-name, a genuinely blank field, and a Cloze note with no deletion. Anki was not
-running when they were written, so only the first of the three restates a
-measurement already taken on 2026-08-13; the other two are predictions until
-`uv run pytest -m live` has been run once with Anki open.
+**One live test is still unrun: the second cloze field.** The 2026-10-10 live run
+passed everything else, 28 tests. That run settled three earlier gaps:
+- the empty-note measurements added on 2026-08-14, which had been predictions
+  until then;
+- what the bulk tools see from `addTags`, `removeTags` and `deleteNotes`;
+- the `type` that `_cloze_fields` keys off.
+
+The skipped test checks that Anki accepts a deletion in a second cloze field,
+which is what `_cloze_fields` collecting every field rests on. It runs only once
+a note type called `anki-mcp-scratch-cloze2` exists, because the live tier
+cannot delete a note type it creates. Until it runs, that acceptance rests on
+the Anki manual's "one or more cloze replacements" rather than on a measurement.
 
 **Swallowing `AnkiError` is now one helper, `_lookup_or_none`, plus
 `anki_status`.** This paragraph once said a third swallower would be the point to
