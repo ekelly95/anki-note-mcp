@@ -6,7 +6,7 @@ changes.
 
 [semver]: https://semver.org/spec/v2.0.0.html
 
-## Unreleased
+## 0.2.0 — 2026-10-10
 
 Fixes from an audit on 2026-10-10.
 
