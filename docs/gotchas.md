@@ -14,10 +14,18 @@ arbitrary style until you know what they cost.
   **no retries**: a retry clears neither a dialog nor macOS App Nap, it just
   doubles the wait.
 
-- **`anki_sync` confirms nothing.** Success means Anki accepted the request. With
-  no AnkiWeb account configured it fails outright with `sync: auth not
-  configured`, which is at least honest; with an account and a conflict prompt it
-  can sit queued indefinitely and this call cannot tell.
+- **`anki_sync` waits for the sync, and refuses a full one.** This was
+  documented as fire-and-forget until 2026-10-10, which it never was. Read from
+  the installed add-on: its `sync` handler runs the collection sync to the end
+  before replying, raises unless the outcome was "no changes" or a normal sync,
+  and only then starts Anki's own follow-up sync from the main window, media
+  included, which the call does not wait for. So success means the collection is
+  in step with AnkiWeb; a sync that needs a full upload or download comes back as
+  `Sync status … not one of …` and syncs nothing; and with no AnkiWeb account it
+  fails with `sync: auth not configured`. Because it blocks for the real
+  duration, sync gets a read budget of at least 120 seconds rather than the
+  shared `ANKI_CONNECT_TIMEOUT`, and its timeout message says the sync may still
+  be running rather than blaming a dialog.
 
 - **`anki_sync` refusing is usually correct, not a regression.** It is gated
   behind `ANKI_ALLOW_SYNC`, separately from write access, and that variable is

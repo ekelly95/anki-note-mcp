@@ -38,9 +38,10 @@ if it does not, the missing test is the first thing to write.
     reach AnkiConnect; `ANKI_ALLOW_SYNC` opens sync and nothing else, and
     `ANKI_ALLOW_DELETE` opens delete and nothing else.** Unset is the safe value
     for all three, and all three are parsed strictly rather than truthily.
-11. **A deletion needs an agreed count.** `anki_delete_notes` refuses a blank
-    query and refuses unless the match count equals `expected_count`, and in
-    both cases nothing reaches `deleteNotes`.
+11. **A deletion needs an agreed count the user could see.** `anki_delete_notes`
+    refuses a blank query, refuses an `expected_count` above
+    `ANKI_MAX_SEARCH` before any request is made, and refuses unless the match
+    count equals `expected_count`. In every case nothing reaches `deleteNotes`.
 
 ## Deliberate choices
 
