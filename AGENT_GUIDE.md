@@ -77,6 +77,11 @@ Each is a decision plus the failure mode of the obvious alternative.
 - **`updateNote`, not `updateNoteFields`,** which cannot touch tags at all.
 - **The preflight is `canAddNotesWithErrorDetail`,** so a duplicate is a result
   rather than an exception a loop has to catch.
+- **The cloze guard reads `findModelsByName`,** on add and on any update that
+  touches a cloze field. The guard needs two facts: whether the note type is
+  cloze-kind, and every field its front templates read. `modelTemplates` gives
+  only the second, which made the guard refuse standard types that use a cloze
+  filter, and stop at the first cloze field.
 - **The duplicate check sets `checkChildren`.** Left at AnkiConnect's default, a
   duplicate in `Deck::Sub` is invisible when adding to `Deck`.
 - **The startup banner is ASCII.** Windows stderr is not reliably UTF-8.
@@ -137,7 +142,13 @@ speak for — the add-on's own behaviour. It writes to a real collection.
   `AnkiProtocolError` — a bare `TypeError` is true but useless to a caller, and
   a string is worse than that, since indexing or iterating one succeeds and
   yields characters. Check it inline unless more than one tool reads the same
-  action; `notesInfo` is read by three, which is why `_note_infos` exists.
+  action. `notesInfo` is read by five, which is why `_note_infos` exists. It
+  also checks that every real note entry has `fields`, `modelName` and `tags`,
+  so a tool can index those without a default that would hide a bad reply.
+- **A lookup whose failure must not change the outcome** goes through
+  `_lookup_or_none`, which is the only place an `AnkiError` is swallowed
+  (`anki_status` aside). Use it only for a courtesy layered on a decision the
+  add-on makes anyway, and never on a write.
 - **A new configuration value** gets a floor *and* a ceiling in `config.py`, a
   docstring on the `Config` field saying what the number means, a row in the
   README's configuration table, and a test that a malformed value is refused

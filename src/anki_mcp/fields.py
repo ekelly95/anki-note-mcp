@@ -18,7 +18,11 @@ What survives normalization, and why:
     a card almost always pronounces text that is already in the field, so its
     filename would spend snippet budget repeating what is there.
   - `<img>` becomes `[image: wave.png]` — for a vocabulary card the filename is
-    often the meaning, and it costs a few characters to keep it.
+    often the meaning, and it costs a few characters to keep it. Its `alt` text
+    wins when it has one: that is the author describing the picture in words,
+    which is what a plain-text rendering is for.
+  - table cells and `<hr>` break lines like the block tags do, so adjacent
+    cells do not run together into one word.
   - `<style>` and `<script>` contents are dropped. `html.parser` puts them in
     CDATA mode and hands the raw CSS or JS to `handle_data`, so a field with
     pasted styled content otherwise renders as "plain text" that is mostly
@@ -34,7 +38,23 @@ from html.parser import HTMLParser
 
 # Tags whose boundaries are a line break in the rendered card.
 _BREAKING = frozenset(
-    {"br", "div", "p", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"}
+    {
+        "br",
+        "div",
+        "p",
+        "li",
+        "tr",
+        "td",
+        "th",
+        "hr",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "blockquote",
+    }
 )
 
 # Tags whose text is markup for the renderer, not content for a reader.
@@ -77,16 +97,24 @@ _CLOZE_RE = re.compile(r"\{\{c\d+::[\s\S]*?\}\}")
 _CLOZE_ATTEMPT_RE = re.compile(r"\{\{\s*c", re.IGNORECASE)
 
 
+def _usable_label(text: str) -> bool:
+    # A `]` would close the marker early and a long label would eat the whole
+    # snippet budget the caller came for.
+    return bool(text) and "]" not in text and len(text) <= _MAX_IMAGE_NAME
+
+
 def _image_label(attrs: list[tuple[str, str | None]]) -> str:
-    """`[image]`, carrying the media filename when there is a usable one."""
+    """`[image]`, carrying the alt text or the media filename when usable."""
+    alt = " ".join((next((value for name, value in attrs if name == "alt"), None) or "").split())
+    if _usable_label(alt):
+        return f" [image: {alt}] "
+
     src = next((value for name, value in attrs if name == "src"), None) or ""
     if not src or _HAS_SCHEME_RE.match(src):
         return " [image] "
 
     name = src.replace("\\", "/").rsplit("/", 1)[-1]
-    # A `]` would close the marker early and a long name would eat the whole
-    # snippet budget the caller came for.
-    if not name or "]" in name or len(name) > _MAX_IMAGE_NAME:
+    if not _usable_label(name):
         return " [image] "
     return f" [image: {name}] "
 

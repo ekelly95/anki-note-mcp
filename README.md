@@ -17,9 +17,10 @@ call than a single search can show them first. Nothing here changes a card's
 scheduling, and syncing to AnkiWeb is refused unless it is switched on
 separately too.
 
-**Status: beta.** All nine tools work end to end against a real collection. The
-offline test suite covers every statement and branch; a separate opt-in tier runs
-against a real Anki.
+**Status: beta.** All nine tools work against a real collection, and a separate
+opt-in test tier exercises every one of them but `anki_sync` against a real Anki;
+sync is left out because a test of it would push to AnkiWeb. The offline test
+suite covers every statement and branch.
 
 ---
 
@@ -239,10 +240,10 @@ reported as truncated because every field was individually fine.
   change, visible in Anki and recoverable from a backup. A sync pushes the
   collection to AnkiWeb and on to every other device, which is the one effect
   here that does not stay on this machine.
-- **`ANKI_READ_ONLY` is parsed strictly** — `1/true/yes/on` and `0/false/no/off`,
-  anything else is a startup error. It is the one setting whose silent
-  misreading would leave a collection writable while its owner believed
-  otherwise.
+- **`ANKI_READ_ONLY` is parsed strictly** — `1/true/yes/on` and `0/false/no/off`
+  (an empty value also reads as off), anything else is a startup error. It is
+  the one setting whose silent misreading would leave a collection writable
+  while its owner believed otherwise.
 - **Note content is data, not instruction.** A shared deck is written by a
   stranger, and a field can carry text that is invisible in Anki. Every tool that
   returns content says so, and says it as a separate field rather than as
@@ -369,7 +370,17 @@ It needs Anki running with AnkiConnect installed, and it is excluded from CI for
 that reason. It exists to pin add-on behaviour that no fake can be trusted to
 predict — the empty-dict-for-a-missing-note shape, the subdeck duplicate rule,
 the exact wording of a duplicate rejection and of the three ways a note can be
-refused as "empty", and that sixty sequential calls do not drop a connection.
+refused as "empty", what the two bulk tools see from `addTags`, `removeTags` and
+`deleteNotes`, and that sixty sequential calls do not drop a connection.
+
+One live test needs a note type you make yourself, because AnkiConnect cannot
+delete a note type and the tier promises to leave nothing behind. It checks
+that a deletion in a second cloze field counts. It skips until a note type
+called `anki-mcp-scratch-cloze2` exists; the comment above it in `live_test.py`
+says how to make one.
+
+If an MCP host has this server open, `uv run` fails with `os error 32` while
+re-syncing the environment. Add `--no-sync`; see `docs/gotchas.md`.
 
 ---
 

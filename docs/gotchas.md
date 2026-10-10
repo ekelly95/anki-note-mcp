@@ -181,3 +181,16 @@ arbitrary style until you know what they cost.
   toolchain and is not one. Either close the host or use `uv run --no-sync`,
   which skips the reinstall; the console script is irrelevant to the test suite,
   which imports the package. `uv lock` and `uv build` are unaffected.
+
+- **`mypy` can refuse to start on a Windows machine with Application Control.**
+  The mypy wheel is compiled with mypyc, and a Smart App Control or WDAC policy
+  can block its `.pyd` files from loading, which makes `uv run mypy src` die on
+  import before it has read a line. Like `os error 32` above, it looks like a
+  broken toolchain and is not one. Run the pure-Python build of the same version
+  instead, pointed at the project's interpreter so it still sees the installed
+  packages and the strict settings in `pyproject.toml`:
+  `uvx --no-binary-package mypy --from mypy==<locked version> mypy
+  --python-executable .venv\Scripts\python.exe src`. Checked on 2026-10-10 with
+  mypy 2.3.0: it loads `build.py` rather than the compiled module, and gives the
+  same result as the compiled one. An `uv run --with mypy` overlay does not work
+  for this, because the project's compiled copy is found first.

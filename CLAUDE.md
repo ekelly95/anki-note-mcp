@@ -34,7 +34,14 @@ uv run ruff check src
 uv run mypy src
 uv run coverage run -m pytest
 uv run coverage report
+uv build
 ```
+
+If an MCP host on this machine has the server registered and open, every
+`uv run` fails with `os error 32`. Add `--no-sync` to each one rather than
+treating it as a broken toolchain. If `mypy` dies on import, an Application
+Control policy is blocking its compiled build. `docs/gotchas.md` has both
+workarounds.
 
 Never pipe the test run. Branch coverage is gated at 100%. Use
 `uv run pytest -m live` only when a real Anki is relevant; it writes to a real

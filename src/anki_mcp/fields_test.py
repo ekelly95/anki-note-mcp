@@ -60,6 +60,28 @@ def test_an_image_with_no_usable_name_is_still_just_an_image() -> None:
     assert to_text(f'<img src="{"a" * 200}.png">') == "[image]"
 
 
+def test_alt_text_describes_an_image_better_than_its_filename() -> None:
+    """`alt` is the author saying in words what the picture is, which is what a
+    plain-text rendering exists to carry. Held to the filename's rules: one
+    line, no `]`, and short enough not to eat the snippet."""
+    assert to_text('<img src="paste-1a2b.jpg" alt="a wave">') == "[image: a wave]"
+    assert to_text('<img src="data:image/png;base64,AAAA" alt="the dog">') == "[image: the dog]"
+    assert to_text('<img src="x.png" alt="  two\n lines ">') == "[image: two lines]"
+    # Unusable alt text falls back to the filename rather than to nothing.
+    assert to_text('<img src="wave.png" alt="">') == "[image: wave.png]"
+    assert to_text('<img src="wave.png" alt="a]b">') == "[image: wave.png]"
+    assert to_text(f'<img src="wave.png" alt="{"a" * 200}">') == "[image: wave.png]"
+
+
+def test_table_cells_and_rules_do_not_run_together() -> None:
+    """A table is one of the few ways a card holds several values side by side,
+    and without these as breaks `<td>perro</td><td>dog</td>` became `perrodog`."""
+    table = "<table><tr><th>es</th><th>en</th></tr><tr><td>perro</td><td>dog</td></tr></table>"
+    assert to_text(table) == "es\nen\nperro\ndog"
+    assert to_text("above<hr>below") == "above\nbelow"
+    assert snippet(table, 120) == "es en perro dog"
+
+
 def test_style_and_script_contents_never_reach_the_text() -> None:
     """The same defect this module exists for, one layer down: html.parser puts
     these in CDATA mode and hands the raw CSS to handle_data, so a field with

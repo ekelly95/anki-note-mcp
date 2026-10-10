@@ -149,11 +149,14 @@ tool's docstring promises a structured outcome "so a loop can skip and continue"
 and a message that names the fault stops a loop as effectively as a raise without
 breaking that contract.
 
-## Status, 2026-08-13
+## Status, 2026-10-10
 
-All seven tools are wired and working end to end against a real collection. The
-offline suite covers 100% of statements and branches; the live tier is opt-in
-because it writes to a real collection.
+All nine tools are wired, and every one but `anki_sync` is exercised end to end
+by the live tier against a real collection; sync is left out because a test of
+it would push to AnkiWeb. The offline suite covers 100% of statements and
+branches; the live tier is opt-in because it writes to a real collection.
+`anki_tag_notes` and `anki_delete_notes` were added on 2026-10-07 and gained
+live tests on 2026-10-10.
 
 Landed since the first working version: `ANKI_READ_ONLY` and a separately-gated
 `ANKI_ALLOW_SYNC`; a response budget bounding what one call may return in total;
@@ -166,18 +169,19 @@ Landed as engineering rather than behaviour: a licence, a `py.typed` marker,
 publishable metadata under the distribution name `anki-note-mcp`, a coverage
 gate at the measured 100%, and CI workflows.
 
-**CI is written and has still never completed a job, 2026-08-15.** Actions is
-disabled at the repository level, so there is no workflow run history at all.
-That is repository state rather than workflow state: nothing about these
-workflows can be concluded from it, in either direction. Enabling Actions and
-dispatching `ci.yml` is the first thing to do here, and what comes back belongs
-in this section.
+**CI runs, and the full grid has passed.** Before 0.1.0 shipped on 2026-10-08,
+the `workflow_dispatch` grid ran green on Windows, macOS and Linux under 3.10
+to 3.14. Getting there took commit 8c9893a: 3.10.11 needed its own IPv6 host
+check, and 3.11 needed a coverage path with no thrown exception. Until
+2026-08-15, Actions was disabled at the repository level and no job had ever
+completed, which is why the next subsection exists.
 
-### What was proven locally instead, 2026-08-14
+### What was proven locally before CI ran, 2026-08-14
 
 Everything CI would check that does not require a runner was run by hand, so
-that a first green build confirms rather than discovers. Do not repeat this work
-without a reason:
+that a first green build would confirm rather than discover. The numbers below
+are as of that date. The suite has grown since, and the grid has since run for
+real:
 
 - **The whole declared Python range passes.** Both tiers — 264 offline tests at
   a measured 100% of statements and branches, and all 25 live tests against a
@@ -196,20 +200,18 @@ without a reason:
   collapse to single-line strings with no embedded newline, which is exactly the
   failure the comment above them warns about.
 - **All five pinned action SHAs resolve to the versions their comments claim**,
-  checked against the GitHub API on 2026-08-15: `actions/checkout` v7.0.1,
-  `astral-sh/setup-uv` v10.0.0, `actions/upload-artifact` v7.0.1,
-  `actions/download-artifact` v8.0.1 and `pypa/gh-action-pypi-publish` v1.14.2.
+  checked against the GitHub API, last on 2026-10-10: `actions/checkout` v7.0.1,
+  `astral-sh/setup-uv` v10.2.0 (bumped from v10.0.0 by Dependabot),
+  `actions/upload-artifact` v7.0.1, `actions/download-artifact` v8.0.1 and
+  `pypa/gh-action-pypi-publish` v1.14.2.
   A SHA that does not resolve fails at the moment you least want it to, and this
   is cheap to re-run after any pin is bumped:
   `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`.
 
-So the classifiers' claim now splits cleanly in two. **The Python range is
-proven.** **The OS independence is not**, and cannot be from here: every
-measurement is on Windows, and neither WSL nor Docker is available on the
-machine this was built on. Treat that half as an intention until a matrix run is
-green. What a first CI run is still genuinely discovering is Linux and macOS,
-and whether GitHub evaluates the `workflow_dispatch` matrix expression the way
-reading it says it should.
+At that date the classifiers' claim split in two: the Python range was proven,
+and OS independence was only an intention, because every measurement had been
+on Windows. The green grid before 0.1.0 settled the second half. Using the
+server against a real Anki has still only been done on Windows.
 
 **The full matrix is on demand rather than on every push.** `ci.yml` picks its
 matrix from `github.event_name`: a push or pull request runs Ubuntu on 3.12, and

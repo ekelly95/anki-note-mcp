@@ -6,6 +6,45 @@ changes.
 
 [semver]: https://semver.org/spec/v2.0.0.html
 
+## Unreleased
+
+Fixes from an audit on 2026-10-10.
+
+- `anki_update_note` applies the cloze guard. Rewriting a cloze note's text to
+  a value with no valid deletion used to be written and reported as
+  `updated: true`, and every existing card then rendered "No cloze 1 found on
+  card". An update to a cloze field is now judged on the note as it would be
+  afterwards and refused if it would be left with no deletion. An update that
+  leaves the cloze fields alone is not checked, so a note that is already broken
+  can still be edited.
+- The cloze guard follows Anki's rules on which notes need a deletion. It
+  accepts a deletion in any field the front template reads through a cloze
+  filter, not just the first, and names all of those fields in a refusal. It
+  applies only to cloze-kind note types, so a standard type whose template uses
+  a cloze filter is no longer refused. The note type is read with one
+  `findModelsByName` call, cached as before.
+- `anki_delete_notes` refuses an `expected_count` above `ANKI_MAX_SEARCH`, the
+  most a single search can show the user before they agree to a count. Before
+  any request is sent, it points at Anki's Browse window for anything larger.
+- `anki_sync` is described as it behaves. The add-on finishes the collection
+  sync before replying and raises when a full sync is needed, so success means
+  the collection is in step with AnkiWeb. It is not a queued request. Sync now
+  waits at least 120 seconds. Its timeout message says the sync may still be
+  running and no longer blames a dialog.
+- A reply that cannot be decoded (a bad `Content-Encoding`, a redirect loop) is
+  an `AnkiProtocolError`. It used to escape the client as a raw httpx exception.
+- A `notesInfo` entry missing `fields`, `modelName` or `tags` is a typed error.
+  Before, it was read as empty, and `anki_tag_notes` could report a note as
+  changed when its state was unknown.
+- An `addNote` reply that is not a note ID is a typed error that says the note
+  may already exist, so the card is not sent a second time.
+- `anki_find_notes` results carry `budget_exhausted`, which says when the
+  response budget rather than `limit` cut a search short. A `ANKI_SNIPPET_CHARS`
+  that does not fit inside `ANKI_MAX_RESPONSE_CHARS` is refused at startup.
+- Snippets and plain text break lines at table cells and `<hr>`, and an image's
+  `alt` text is preferred over its filename.
+- An `ANKI_CONNECT_API_KEY` of only whitespace is treated as unset.
+
 ## 0.1.0 — 2026-10-08
 
 The first release.

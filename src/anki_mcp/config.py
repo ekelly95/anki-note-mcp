@@ -75,7 +75,12 @@ class Config:
     """Visible characters per search snippet, counted after HTML is stripped."""
 
     max_field_chars: int
-    """Visible characters per field in `anki_get_note`."""
+    """Raw HTML characters per field in `anki_get_note`.
+
+    Measured on the stored HTML, not the visible text: a field over this is
+    withheld from `fields` entirely, and its rendered text is shortened to the
+    same number of characters. An embedded image can put a field far over in
+    HTML while its text is a dozen characters."""
 
     max_response_chars: int
     """Characters of note content one tool call may return in total.
@@ -131,7 +136,9 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
 
     config = Config(
         url=_checked_url(e.get("ANKI_CONNECT_URL", DEFAULT_URL)),
-        api_key=e.get("ANKI_CONNECT_API_KEY") or None,
+        # Stripped, because a key of a few spaces is a pasting accident, and
+        # sent as given it fails exactly like a wrong key would.
+        api_key=(e.get("ANKI_CONNECT_API_KEY") or "").strip() or None,
         timeout_s=_bounded_float(e, "ANKI_CONNECT_TIMEOUT", 10.0, MAX_TIMEOUT_S),
         max_search_results=_bounded_int(e, "ANKI_MAX_SEARCH", 50, MAX_SEARCH_RESULTS),
         snippet_chars=_bounded_int(e, "ANKI_SNIPPET_CHARS", 120, MAX_SNIPPET_CHARS),
@@ -234,7 +241,8 @@ def _flag(env: Mapping[str, str], name: str) -> bool:
     if value in _FALSE:
         return False
     raise ValueError(
-        f"{name} must be one of 1/true/yes/on to enable, or 0/false/no/off to disable, got {raw!r}."
+        f"{name} must be one of 1/true/yes/on to enable, or 0/false/no/off (or empty) to "
+        f"disable, got {raw!r}."
     )
 
 

@@ -48,6 +48,17 @@ jobs:
             echo "::error::tag $tag does not match __version__ $version"
             exit 1
           fi
+      # A release whose notes were never written is a version nobody can find
+      # the changes for. Checked against the heading form CHANGELOG.md uses,
+      # `## 0.1.0 — 2026-10-08`: the first two words of a line, compared as a
+      # fixed string, so the version's dots cannot match any character.
+      - name: The changelog has a heading for this version
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          if ! cut -d' ' -f1,2 CHANGELOG.md | grep -qxF "## $version"; then
+            echo "::error::CHANGELOG.md has no '## $version' heading"
+            exit 1
+          fi
       # Lint and types run here as well as in `ci.yml`, because a tag can point
       # at a commit that never reached `main` and so never met those gates. The
       # wheel ships `py.typed`: the annotations are a promise to everyone who
@@ -81,6 +92,54 @@ jobs:
           import glob, zipfile
           names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
           assert "anki_mcp/py.typed" in names, names
+          PY
+      # The strongest gate here: build output that imports on the dev machine
+      # still proves nothing about a machine that only has the wheel. This
+      # installs it outside the checkout and speaks the actual protocol to it.
+      # It needs no Anki — the client is constructed at startup but connects
+      # only when a tool is called — which is exactly why it is cheap enough to
+      # run on every push.
+      - name: Install the wheel elsewhere and speak MCP to it
+        run: |
+          mkdir -p /tmp/scratch && cd /tmp/scratch
+          python -m venv .venv
+          .venv/bin/python -m pip install --quiet "$(ls $GITHUB_WORKSPACE/dist/*.whl)"
+          .venv/bin/python - <<'PY'
+          import json, subprocess, sys
+          from importlib.metadata import version
+
+          expected = version("anki-note-mcp")
+          # encoding is explicit rather than inherited: text=True decodes the
+          # pipe with the locale codec, which on Windows is cp1252 and raises on
+          # any non-ASCII character in a reply the server wrote correctly. This
+          # job runs on Linux where the default is already UTF-8, so the pin is
+          # for whoever copies this script to a machine where it is not.
+          proc = subprocess.Popen(
+              [".venv/bin/anki-mcp"],
+              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+              text=True, encoding="utf-8",
+          )
+          request = {
+              "jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {
+                  "protocolVersion": "2025-06-18",
+                  "capabilities": {},
+                  "clientInfo": {"name": "ci", "version": "0"},
+              },
+          }
+          out, err = proc.communicate(json.dumps(request) + "\n", timeout=60)
+          reply = next((json.loads(line) for line in out.splitlines() if line.strip()), None)
+          if reply is None:
+              print(f"::error::no reply on stdout. stderr was: {err}")
+              sys.exit(1)
+          info = reply["result"]["serverInfo"]
+          assert info["name"] == "anki-mcp", info
+          # Compared against the installed distribution's own metadata, because
+          # FastMCP's constructor takes no version: without the assignment in
+          # build_server this silently reports the MCP SDK's version instead,
+          # and any check that merely asserts the field is non-empty passes.
+          assert info["version"] == expected, f"expected {expected}, got {info}"
+          print("initialize ->", info)
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
